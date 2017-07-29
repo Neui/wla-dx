@@ -18,7 +18,7 @@ option(GDB_DEBUGGING
 
 # CMake will automatically define WIN32 for us for Microsoft compilers, how
 # convenient! But we need MSDOS flag as well. Additionally, other compilers
-# don't define it by default. WIN32 Does NOT include Cygwin.
+# don't define it by default. WIN32 does NOT include Cygwin.
 if (WIN32)
     add_definitions(-DWIN32)
     add_definitions(-DMSDOS)
@@ -27,25 +27,33 @@ endif (WIN32)
 # This should work on ANY POSIX-compliant environment.
 if (UNIX)
     add_definitions(-DUNIX)
-    link_libraries(m) # Deprecated, but best solution. See: 
+    link_libraries(m) # Deprecated, but best solution. See
     # http://www.cmake.org/pipermail/cmake/2009-April/028439.html
 endif (UNIX)
 
 if ((CMAKE_C_COMPILER_ID MATCHES "Clang") OR (CMAKE_C_COMPILER_ID MATCHES "GNU"))
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ansi -pedantic-errors -Wall -Wextra")
     string(REPLACE "-O2" "-O3" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND
+            NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 3.8)
+        set(GDB_DEBUGGING OFF)
+        message(STATUS "You need at least clang 3.8 for GDB_DEBUGGING."
+            " Disabling it for now.")
+    endif()
+    if(GDB_DEBUGGING)
+        set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ggdb")
+    endif(GDB_DEBUGGING)
 endif ()
 
-# Tell MSVC to STFU about _CRT_SECURE_NO_WARNINGS
 if (MSVC)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Za") # Disable extensions
     # Per http://www.cmake.org/pipermail/cmake/2011-October/046738.html,
     # replace flags directly instead of appending them.
     string(REPLACE "/O[0-4]" "/Ox" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
-    add_definitions(/D_CRT_SECURE_NO_WARNINGS)
+    add_definitions(/D_CRT_SECURE_NO_WARNINGS) # STFU about "unsecure" functions
 endif (MSVC)
 
-# --- WATCOM C Compiler works just fine as well. Might be a decent alternative
+# WATCOM C Compiler works just fine as well. Might be a decent alternative
 # 386 MSDOS compiler as well (compare to DJGPP).
 if (WATCOM)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -za") # Disable extensions
@@ -53,10 +61,7 @@ if (WATCOM)
     string(REGEX REPLACE "-w=[0-4]" "-w=4" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 endif (WATCOM)
 
-# Make the source tree available to includes
 include_directories("${PROJECT_SOURCE_DIR}")
-# Generated tables are created at the top build-tree directory
-include_directories("${CMAKE_BINARY_DIR}")
 
 add_subdirectory(wlab)
 add_subdirectory(wlalink)
@@ -91,7 +96,8 @@ foreach(CPU IN LISTS CPUS)
         COMPILE_DEFINITIONS "${CPU_UPPER}")
     set_property(TARGET gen-${CPU_TARGET} PROPERTY
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/op_tbl_gen/")
-    set(TABLE_GEN_OUTPUT "${CMAKE_BINARY_DIR}/op_tbl_gen/opcodes_${CPU_TARGET}_tables.c")
+    set(TABLE_GEN_OUTPUT
+        "${CMAKE_BINARY_DIR}/op_tbl_gen/opcodes_${CPU_TARGET}_tables.c")
     add_custom_command(
         OUTPUT "${TABLE_GEN_OUTPUT}"
         COMMAND gen-${CPU_TARGET} "${TABLE_GEN_OUTPUT}"
