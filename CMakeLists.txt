@@ -31,7 +31,7 @@ if (UNIX)
     # http://www.cmake.org/pipermail/cmake/2009-April/028439.html
 endif (UNIX)
 
-if ((CMAKE_C_COMPILER_ID MATCHES "Clang") OR (CMAKE_C_COMPILER_ID MATCHES "GNU"))
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ansi -pedantic-errors -Wall -Wextra")
     string(REPLACE "-O2" "-O3" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
     if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND
@@ -67,7 +67,7 @@ add_subdirectory(wlab)
 add_subdirectory(wlalink)
 add_subdirectory(doc)
 
-# --- WLA executables ---
+# WLA-CPU executables
 set(WLA_SRCS
     main.c
     hashmap.c
@@ -114,7 +114,7 @@ foreach(CPU IN LISTS CPUS)
     install(TARGETS wla-${CPU_TARGET} DESTINATION bin)
 endforeach(CPU)
 
-# Testings
+# Testing
 enable_testing()
 add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" --verbose
