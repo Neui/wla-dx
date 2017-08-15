@@ -1,0 +1,11 @@
+#ifndef VERSION_INFO_H
+#define VERSION_INFO_H
+
+#define VERSION_FULL_STRING "@VERSION_FULL_STRING@"
+#define VERSION "@VERSION@"
+
+/* Primarely for AMIGA */
+#define VERSION_AMIGA_DATE "@VERSION_AMIGA_DATE@"
+#define VERSION_AMIGA "@VERSION_AMIGA@"
+
+#endif

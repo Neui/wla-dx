@@ -72,7 +72,9 @@ if (GEN_DOC_MAN)
         "${DOC_OUT}/wlab.1" ${DOC_MAN_CPUFILES})
     add_custom_command(
         OUTPUT ${DOC_MAN_FILES}
-        COMMAND "${SPHINX_EXECUTABLE}" -q -b man
+        COMMAND "${CMAKE_COMMAND}" -E env
+                "VERSION_INFO_H_FILE=${VERSION_INFO_H_FILE}"
+            "${SPHINX_EXECUTABLE}" -q -b man
             -d "${CMAKE_CURRENT_BINARY_DIR}/man.doctree"
             "${DOC_SRC}" "${CMAKE_CURRENT_BINARY_DIR}/gen-man"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
@@ -93,7 +95,9 @@ endif (GEN_DOC_MAN)
 if (GEN_DOC_SINGLEHTML)
     add_custom_command(
         OUTPUT "${DOC_OUT}/wla-dx.html"
-        COMMAND "${SPHINX_EXECUTABLE}" -q -b singlehtml
+        COMMAND "${CMAKE_COMMAND}" -E env
+                "VERSION_INFO_H_FILE=${VERSION_INFO_H_FILE}"
+            "${SPHINX_EXECUTABLE}" -q -b singlehtml
             -d "${CMAKE_CURRENT_BINARY_DIR}/shtml.doctree"
             "${DOC_SRC}" "${CMAKE_CURRENT_BINARY_DIR}/gen-shtml"
         COMMAND "${CMAKE_COMMAND}" -E copy
@@ -113,7 +117,9 @@ endif (GEN_DOC_SINGLEHTML)
 if (GEN_DOC_SINGLETEXT)
     add_custom_command(
         OUTPUT "${DOC_OUT}/wla-dx.txt"
-        COMMAND "${SPHINX_EXECUTABLE}" -q -b singletext
+        COMMAND "${CMAKE_COMMAND}" -E env
+                "VERSION_INFO_H_FILE=${VERSION_INFO_H_FILE}"
+            "${SPHINX_EXECUTABLE}" -q -b singletext
             -d "${CMAKE_CURRENT_BINARY_DIR}/stext.doctree"
             "${DOC_SRC}" "${CMAKE_CURRENT_BINARY_DIR}/gen-stext"
         COMMAND "${CMAKE_COMMAND}" -E copy

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.9 FATAL_ERROR)
+cmake_minimum_required(VERSION 2.8.11 FATAL_ERROR)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/binaries/")
 
@@ -9,7 +9,7 @@ if(NOT CMAKE_BUILD_TYPE)
         "MinSizeRel" "RelWithDebInfo")
 endif()
 
-project (WLA-DX C)
+project(WLA-DX C)
 
 set(CPUS gb wdc65c02 mcs6502 mcs6510 w65816 huc6280 spc700 z80)
 
@@ -61,13 +61,78 @@ if (WATCOM)
     string(REGEX REPLACE "-w=[0-4]" "-w=4" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 endif (WATCOM)
 
-include_directories("${PROJECT_SOURCE_DIR}")
+# Determine if we could use git
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git/logs/HEAD")
+    find_package(Git)
+    if(GIT_FOUND)
+        message("Found git: ${GIT_EXECUTABLE}")
+        option(USE_GIT_VERSION "Use version from git" ON)
+    endif()
+else()
+    option(USE_GIT_VERSION "Use version from git" OFF)
+endif()
+set(GIT_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.git"
+    CACHE PATH ".git directory in the repo")
+mark_as_advanced(GIT_ROOT_DIR)
+
+set(VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
+    CACHE FILEPATH "VERSION file, containing the current version")
+mark_as_advanced(VERSION_FILE)
+
+set(VERSION_INFO_H_IN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/version-info.h.in")
+set(VERSION_INFO_H_FILE "${CMAKE_CURRENT_BINARY_DIR}/version-info.h")
+if(USE_GIT_VERSION)
+    if(NOT GIT_FOUND) # Implicity EXISTS .git
+        message(FATAL_ERROR "Couldn't find git!")
+    endif()
+    if(NOT EXISTS "${GIT_ROOT_DIR}")
+        message(FATAL_ERROR "Coudldn't find .git dir! Please Set GIT_ROOT_DIR.")
+    endif()
+    add_custom_command(OUTPUT "${VERSION_INFO_H_FILE}"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+            "-DGIT=${GIT_EXECUTABLE}"
+            "-DGITROOT=${GIT_ROOT_DIR}"
+            "-DSRC=${VERSION_INFO_H_IN_FILE}"
+            "-DDEST=${VERSION_INFO_H_FILE}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/git-version.cmake"
+        DEPENDS "${GIT_ROOT_DIR}/logs/HEAD" "${GIT_ROOT_DIR}/HEAD"
+            "${CMAKE_CURRENT_SOURCE_DIR}/git-version.cmake"
+            "${VERSION_INFO_H_IN_FILE}"
+        COMMENT "Generating version header file (git)" VERBATIM
+        )
+    add_definitions(-DHAVE_VERSION_INFO_H)
+    list(APPEND VERSION_FILES "${VERSION_INFO_H_FILE}")
+elseif(EXISTS "${VERSION_FILE}")
+    add_custom_command(OUTPUT "${VERSION_INFO_H_FILE}"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+            "-DVERSIONFILE=${VERSION_FILE}"
+            "-DSRC=${VERSION_INFO_H_IN_FILE}"
+            "-DDEST=${VERSION_INFO_H_FILE}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/manual-version.cmake"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
+            "${CMAKE_CURRENT_SOURCE_DIR}/manual-version.cmake"
+            "${VERSION_INFO_H_IN_FILE}"
+        COMMENT "Generating version header file (VERSION file)" VERBATIM
+        )
+    add_definitions(-DHAVE_VERSION_INFO_H)
+    list(APPEND VERSION_FILES "${VERSION_INFO_H_FILE}")
+else()
+    message(WARNING "Couldn't find a VERSION file (set VERSION_FILE) "
+        "or a valid git setup (USE_GIT_VERSION and GIT_ROOT_DIR)! "
+        "Using '1.0-unkown' as version.")
+endif()
+add_custom_target(version ALL DEPENDS ${VERSION_FILES}) # Gens version files
+
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
+include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
 add_subdirectory(wlab)
 add_subdirectory(wlalink)
 add_subdirectory(doc)
 
-# WLA-CPU executables
+# WLA-CPU executablesgit-version
 set(WLA_SRCS
     main.c
     hashmap.c
@@ -81,19 +146,25 @@ set(WLA_SRCS
     listfile.c
     )
 
+set(WLA_CPU_TARGETS)
 foreach(CPU IN LISTS CPUS)
     # CPU_TARGET has the prefix WDC and MCS removed because they usually
     # named like that and for backwards compatibility
     string(REGEX REPLACE "^(wdc|w|mcs)(65)" "\\2" CPU_TARGET "${CPU}")
     string(TOUPPER "${CPU}" CPU_UPPER) # For COMPILE_DEFINITION
+    list(APPEND WLA_CPU_TARGETS "wla-${CPU_TARGET}")
 
     # Generate opcode table
     add_executable(gen-${CPU_TARGET}
         "opcode_table_generator.c"
         "opcodes_${CPU_TARGET}.c"
         )
-    set_property(TARGET gen-${CPU_TARGET} APPEND PROPERTY
-        COMPILE_DEFINITIONS "${CPU_UPPER}")
+    set_property(TARGET gen-${CPU_TARGET} APPEND
+        PROPERTY COMPILE_DEFINITIONS
+            "${CPU_UPPER}"
+            "CPU=\"${CPU_UPPER}\""
+            "CPU_STR=${CPU_UPPER}"
+        )
     set_property(TARGET gen-${CPU_TARGET} PROPERTY
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/op_tbl_gen/")
     set(TABLE_GEN_OUTPUT
@@ -109,10 +180,18 @@ foreach(CPU IN LISTS CPUS)
         ${WLA_SRCS} "${TABLE_GEN_OUTPUT}"
         "opcodes_${CPU_TARGET}.c"
         )
-    set_property(TARGET wla-${CPU_TARGET} APPEND PROPERTY
-        COMPILE_DEFINITIONS "${CPU_UPPER}")
+    set_property(TARGET wla-${CPU_TARGET} APPEND
+        PROPERTY COMPILE_DEFINITIONS
+            "${CPU_UPPER}"
+            "CPU=\"${CPU_UPPER}\""
+            "CPU_STR=${CPU_UPPER}"
+        )
     install(TARGETS wla-${CPU_TARGET} DESTINATION bin)
 endforeach(CPU)
+
+foreach(t wlalink wlab ${WLA_CPU_TARGETS})
+    add_dependencies(${t} version)
+endforeach(t)
 
 # Testing
 enable_testing()
