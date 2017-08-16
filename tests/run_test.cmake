@@ -1,17 +1,52 @@
 include("${COMMON_INCLUDE}")
+set(ENV{PWD} "${SOURCE_DIR}")
 
 # Determine CPU if not set
 if(NOT CPU)
     string(REGEX MATCH "([^/]+)/[^/]+/?$" TMPVAR "${SOURCE_DIR}")
     set(CPU "${CMAKE_MATCH_1}")
 endif(NOT CPU)
-file(GLOB SRCS "*.s") # Get source files
+set(SRCS)
 set(LIBSRCS)
 set(OBJECTS)
 set(LIBRARIES)
 set(DEFS)
-set(WLA_FLAGS)
+set(WLA_FLAGS -x)
 set(LINK_FLAGS)
+set(LINKFILE)
+
+
+if(EXISTS "${SOURCE_DIR}/linkfile")
+    set(LINKFILE "${SOURCE_DIR}/linkfile")
+elseif(EXISTS "${SOURCE_DIR}/Linkfile")
+    set(LINKFILE "${SOURCE_DIR}/Linkfile")
+endif()
+
+if(LINKFILE)
+    read_linkfile(
+        LINKFILE "${LINKFILE}"
+        OBJECTS SRCS_PRE
+        #LIBRARIES LIBSRCS_PRE
+        DEFINITIONS DEFS
+        #HEADER HEADER
+        #FOOTER FOOTER
+        )
+    # Convert from objects to source files
+    foreach(OBJ IN LISTS SRCS_PRE)
+        foreach(REGEXP "(.)$;\\1.s" "\\.o;.s")
+            list(GET REGEXP 0 MATCH)
+            list(GET REGEXP 1 REPLACEMENT)
+            string(REGEX REPLACE "${MATCH}" "${REPLACEMENT}" FILENAME "${OBJ}")
+            if(EXISTS "${SOURCE_DIR}/${FILENAME}")
+                list(APPEND SRCS "${SOURCE_DIR}/${FILENAME}")
+                break()
+            endif(EXISTS "${SOURCE_DIR}/${FILENAME}")
+        endforeach(REGEXP)
+    endforeach(OBJ)
+    # TODO: Libraries
+else()
+    file(GLOB SRCS "*.s")
+endif()
 
 set(OUTPUT "out.bin")
 set(EXPECTED "expected.bin")
@@ -36,8 +71,8 @@ if(COMPILE_NORMALLY)
         CPU "${CPU}"
         SOURCES ${SRCS}
         LIBSOURCES ${LIBSRCS}
-        SOURCES ${OBJECTS}
-        LIBSOURCES ${LIBRARIES}
+        OBJECTS ${OBJECTS}
+        LIBRARIES ${LIBRARIES}
         DEFINES ${DEFS}
         WLA_FLAGS ${WLA_FLAGS}
         LINK_FLAGS ${LINK_FLAGS}

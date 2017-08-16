@@ -26,11 +26,11 @@ foreach(DIR
         
         "65c02/linker_test"
         
-        "gb-z80/appendto_test"
-        "gb-z80/background_test"
-        "gb-z80/linker_test"
-        "gb-z80/namespace_test"
-        "gb-z80/sintest"
+        "gb/appendto_test"
+        "gb/background_test"
+        "gb/linker_test"
+        "gb/namespace_test"
+        "gb/sintest"
         
         "huc6280/linker_test"
         "huc6280/ram_sections"
@@ -48,7 +48,7 @@ foreach(DIR
         )
     string(REPLACE "/" "-" TEST_TARGET "${DIR}")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${DIR}")
-    add_test(NAME test-example-${TEST_TARGET}
+    add_test(NAME test-${TEST_TARGET}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${DIR}"
         COMMAND "${CMAKE_COMMAND}" ${TEST_WLA_CPUS_DEFS}
             "-DCOMMON_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/common-test.cmake"

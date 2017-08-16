@@ -73,8 +73,10 @@ endfunction(abort_if_file_unequal)
 
 # (Internal function: Print the COMMANDs used)
 function(execute_process_print)
-    set(INVALIDS TIMEOUT RESULT_VARIABLE OUTPUT_VARIABLE ERROR_VARIABLE
-        INPUT_FILE OUTPUT_FILE ERROR_FILE OUTPUT_QUIET ERROR_QUIET
+    set(INVALIDS TIMEOUT WORKING_DIRECTORY
+        RESULT_VARIABLE OUTPUT_VARIABLE ERROR_VARIABLE
+        INPUT_FILE OUTPUT_FILE ERROR_FILE
+        OUTPUT_QUIET ERROR_QUIET
         OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_STRIP_TRAILING_WHITESPACE)
     set(STATUS_CMD "COMMAND") # Constant, used to prevent an policy thing
     set(STATUS "NONE")
@@ -89,7 +91,11 @@ function(execute_process_print)
             if(STATUS STREQUAL "NONE")
                 message(STATUS "[CMD] ${CMD}")
             else()
-                set(CMD "${CMD} \"${ARG}\"")
+                if(ARG MATCHES " ")
+                    set(CMD "${CMD} \"${ARG}\"")
+                else()
+                    set(CMD "${CMD} ${ARG}")
+                endif()
             endif()
         else()
             if(ARG STREQUAL STATUS_CMD)
@@ -100,7 +106,7 @@ function(execute_process_print)
         endif()
     endforeach(ARG)
     if(STATUS STREQUAL "COLLECT")
-        message(STATUS "[CMD] ${CMD}")
+        message(STATUS "[CMD]${CMD}")
     endif()
 endfunction(execute_process_print)
 # Print the commands executed and execute them, see execute_process()
@@ -152,6 +158,7 @@ function(wla)
         get_full_path("${SRC}" "${SOURCE_DIR}" SRC)
         execute_process_cmd(
             COMMAND "${WLA_${TW_CPU}}" ${TW_FLAGS} -o "${OUT_SRC}" "${SRC}"
+            WORKING_DIRECTORY "${SOURCE_DIR}"
             RESULT_VARIABLE RESULT
             )
         list(APPEND OUT_SRCS "${OUT_SRC}")
@@ -233,7 +240,8 @@ function(wlalink)
     endif(TW_VERBOSE)
     
     execute_process_cmd(
-        COMMAND "${WLALINK}" ${TW_FLAGS} -b "${LINKFILE}" "${OUTPUT}"
+        COMMAND "${WLALINK}" ${TW_FLAGS} "${LINKFILE}" "${OUTPUT}"
+        WORKING_DIRECTORY "${SOURCE_DIR}"
         RESULT_VARIABLE RESULT
         )
     list(APPEND FILES_TO_CLEAN_UP "${OUTPUT}")
@@ -262,7 +270,8 @@ function(wla_all)
     set(options WLA_VERBOSE LINK_VERBOSE VERBOSE
         SYMBOL_WLA SYMBOL_NOGMB)
     set(oneValueArgs OUTPUT CPU)
-    set(multiValueArgs SOURCES LIBSOURCES DEFINES WLA_FLAGS LINK_FLAGS)
+    set(multiValueArgs SOURCES LIBSOURCES OBJECTS LIBRARIES
+        DEFINES WLA_FLAGS LINK_FLAGS)
     cmake_parse_arguments(TW "${options}" "${oneValueArgs}"
         "${multiValueArgs}" ${ARGN})
     
@@ -279,6 +288,7 @@ function(wla_all)
         SOURCES ${TW_SOURCES}
         OUT_VAR OBJECTS
         DEFINES ${TW_DEFINES}
+        FLAGS ${TW_WLA_FLAGS}
         ${WLA_VERBOSE}
         )
     
@@ -287,6 +297,7 @@ function(wla_all)
         SOURCES ${TW_LIBSOURCES}
         OUT_VAR LIBRARIES
         DEFINES ${TW_DEFINES}
+        FLAGS ${TW_WLA_FLAGS}
         ${WLA_VERBOSE}
         )
     
@@ -319,3 +330,71 @@ function(wla_all)
     set(FILES_TO_CLEAN_UP ${FILES_TO_CLEAN_UP} PARENT_SCOPE)
 endfunction(wla_all)
 
+# Reads an linkfile and extract properties from it
+# read_linkfile(
+#     LINKFILE linkfile         # Linkfile to look at
+#     [OBJECTS object_var]      # Variable to store the [objects]
+#     [LIBRARIES libraries_var] # Variable to store the [libraries]
+#     [DEFINITIONS defs_var]    # Variable to store the [definitions]
+#     [HEADER header_var]       # Variable to store the [header]
+#     [FOOTER footer_var]       # Variable to store the [footer]
+#     )
+function(read_linkfile)
+    set(options)
+    set(oneValueArgs LINKFILE OBJECTS LIBRARIES DEFINITIONS HEADER FOOTER)
+    set(multiValueArgs)
+    cmake_parse_arguments(RL "${options}" "${oneValueArgs}"
+        "${multiValueArgs}" ${ARGN})
+    
+    if(NOT LINKFILE)
+        abort("Please specify LINKFILE!")
+    endif(NOT LINKFILE)
+    
+    file(READ "${RL_LINKFILE}" CONTENT)
+    string(REGEX REPLACE ";" "\\\\;" CONTENT "${CONTENT}")
+    string(REGEX REPLACE "\n" ";" CONTENT "${CONTENT}")
+    set(SECTION "")
+    set(OBJECTS)
+    set(LIBRARIES)
+    set(DEFINITONS)
+    
+    foreach(LINE IN LISTS CONTENT)
+        string(REGEX MATCH "^[ \t]+$" IS_EMPTY "${LINE}")
+        string(REGEX MATCH "\\[([a-zA-Z0-9_-]+)\\]" IS_SECTION "${LINE}")
+        if(IS_EMPTY OR LINE STREQUAL "") # Ignore empty lines
+        elseif(IS_SECTION)
+            set(SECTION "${CMAKE_MATCH_1}")
+        elseif(SECTION STREQUAL "objects")
+            list(APPEND OBJECTS "${LINE}")
+        elseif(SECTION STREQUAL "libraries")
+            list(APPEND LIBRARIES "${LINE}")
+        elseif(SECTION STREQUAL "definitions")
+            string(REGEX MATCH "([^ ]+) +(.*)" IS_DEFS "${LINE}")
+            if(NOT IS_DEFS)
+                abort("Failed to parse linkfile '${RL_LINKFILE}': Not a definition: '${LINE}'")
+            endif(NOT IS_DEFS)
+            list(APPEND DEFINITIONS "${CMAKE_MATCH_1}=${CMAKE_MATCH_2}")
+        elseif(SECTION STREQUAL "header")
+            if(RL_HEADER)
+                set("${RL_HEADER}" "${LINE}" PARENT_SCOPE)
+            endif(RL_HEADER)
+        elseif(SECTION STREQUAL "footer")
+            if(RL_FOOTER)
+                set("${RL_FOOTER}" "${LINE}" PARENT_SCOPE)
+            endif(RL_FOOTER)
+        else()
+            message("[LINKFILE READER] Unknown! Section: '${SECTION}', line: '${LINE}'")
+        endif()
+        
+        if(RL_OBJECTS)
+            set("${RL_OBJECTS}" ${OBJECTS} PARENT_SCOPE)
+        endif(RL_OBJECTS)
+        if(RL_LIBRARIES)
+            set("${RL_LIBRARIES}" ${LIBRARIES} PARENT_SCOPE)
+        endif(RL_LIBRARIES)
+        if(RL_DEFINITIONS)
+            set("${RL_DEFINITIONS}" ${DEFINITIONS} PARENT_SCOPE)
+        endif(RL_DEFINITIONS)
+    endforeach(LINE)
+    
+endfunction(read_linkfile)
