@@ -48,7 +48,7 @@ foreach(DIR
         )
     string(REPLACE "/" "-" TEST_TARGET "${DIR}")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${DIR}")
-    add_test(NAME test-${TEST_TARGET}
+    add_test(NAME ${TEST_TARGET}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${DIR}"
         COMMAND "${CMAKE_COMMAND}" ${TEST_WLA_CPUS_DEFS}
             "-DCOMMON_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/common-test.cmake"
@@ -57,3 +57,4 @@ foreach(DIR
             "-P" "${CMAKE_CURRENT_SOURCE_DIR}/run_test.cmake"
         )
 endforeach(DIR)
+

@@ -177,13 +177,14 @@ endfunction(wla)
 #     OUTPUT output     # Output linkfile
 #     [OBJECTS object [object]...]     # Object files
 #     [LIBRARIES library [library]...] # Library files
+#     [DEFINES key=value [key=value]...] # Defines
 #     [PREPEND_STR str] # Prepend "str" to file
 #     [APPEND_STR str]  # Append "str" to file
 #     )
 function(create_linkfile)
     set(options)
     set(oneValueArgs OUTPUT PREPEND_STR APPEND_STR)
-    set(multiValueArgs OBJECTS LIBRARIES)
+    set(multiValueArgs OBJECTS LIBRARIES DEFINES)
     cmake_parse_arguments(TL "${options}" "${oneValueArgs}"
         "${multiValueArgs}" ${ARGN})
     
@@ -199,6 +200,15 @@ function(create_linkfile)
         file(APPEND "${LINKFILE}" "${OBJ}\n")
     endforeach(OBJ)
     # TODO: Implement libraries in linkfile correctly
+    if(TL_DEFINES)
+        file(APPEND "${LINKFILE}" "[definitions]\n")
+        foreach(DEF IN LISTS TL_DEFINES)
+            string(REPLACE "=" ";" DEF "${DEF}")
+            list(GET DEF 0 KEY)
+            list(GET DEF 1 VALUE)
+            file(APPEND "${LINKFILE}" "${KEY} ${VALUE}\n")
+        endforeach(DEF)
+    endif(TL_DEFINES)
     file(APPEND "${LINKFILE}" "${TL_APPEND_STR}\n")
     set(FILES_TO_CLEAN_UP ${FILES_TO_CLEAN_UP} PARENT_SCOPE)
 endfunction(create_linkfile)
@@ -258,6 +268,7 @@ endfunction(wlalink)
 #     [OBJECTS object [object]...]       # Additional object files
 #     [LIBRARIES library [library]...]   # Additional library files
 #     [DEFINES def=value [dev=value]...] # Definitions
+#     [LINK_DEFINES def=value [dev=value]...] # Linktime definitions
 #     [WLA_FLAGS flag1 [flag2]...]       # Extra flags passed to wla-CPU
 #     [LINK_FLAGS flag1 [flag2]...]      # Extra flags passed to wlalink
 #     [WLA_VERBOSE]  # wla-CPU is verbose
@@ -271,7 +282,7 @@ function(wla_all)
         SYMBOL_WLA SYMBOL_NOGMB)
     set(oneValueArgs OUTPUT CPU)
     set(multiValueArgs SOURCES LIBSOURCES OBJECTS LIBRARIES
-        DEFINES WLA_FLAGS LINK_FLAGS)
+        DEFINES LINK_DEFINES WLA_FLAGS LINK_FLAGS)
     cmake_parse_arguments(TW "${options}" "${oneValueArgs}"
         "${multiValueArgs}" ${ARGN})
     
@@ -309,7 +320,10 @@ function(wla_all)
         OUTPUT "${LINKFILE}"
         OBJECTS ${OBJECTS}
         LIBRARIES ${LIBRARIES}
+        DEFINES ${TW_LINK_DEFINES}
         )
+    file(READ "${LINKFILE}" LINKFILE_CONTENT) # For easier debugging
+    message(STATUS "[LINKFILE CONTENTS] ${LINKFILE}\n${LINKFILE_CONTENT}")
     
     set(SYMBOLS)
     if(TW_SYMBOL_WLA)

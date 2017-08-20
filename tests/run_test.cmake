@@ -11,8 +11,9 @@ set(LIBSRCS)
 set(OBJECTS)
 set(LIBRARIES)
 set(DEFS)
+set(LDEFS)
 set(WLA_FLAGS -x)
-set(LINK_FLAGS)
+set(LINK_FLAGS -d)
 set(LINKFILE)
 
 
@@ -27,7 +28,7 @@ if(LINKFILE)
         LINKFILE "${LINKFILE}"
         OBJECTS SRCS_PRE
         #LIBRARIES LIBSRCS_PRE
-        DEFINITIONS DEFS
+        DEFINITIONS LDEFS
         #HEADER HEADER
         #FOOTER FOOTER
         )
@@ -74,6 +75,7 @@ if(COMPILE_NORMALLY)
         OBJECTS ${OBJECTS}
         LIBRARIES ${LIBRARIES}
         DEFINES ${DEFS}
+        LINK_DEFINES ${LDEFS}
         WLA_FLAGS ${WLA_FLAGS}
         LINK_FLAGS ${LINK_FLAGS}
         VERBOSE
