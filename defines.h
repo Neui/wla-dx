@@ -95,6 +95,8 @@
 /* 9 - *          16b */
 
 #define OP_SIZE_MAX 16
+#define CPU_STR "GB-Z80"
+#define WLA_NAME "gb"
 
 #ifdef AMIGA
 struct optcode {
@@ -129,6 +131,8 @@ struct optcode {
 /* 4 - x (absolute)   */
 
 #define OP_SIZE_MAX 12
+#define CPU_STR "6502"
+#define WLA_NAME "6502"
 
 #ifdef AMIGA
 struct optcode {
@@ -164,6 +168,8 @@ struct optcode {
 /* 5 - x-abs x-rel    */
 
 #define OP_SIZE_MAX 12
+#define CPU_STR "WDC65C02"
+#define WLA_NAME "65c02"
 
 #ifdef AMIGA
 struct optcode {
@@ -202,6 +208,8 @@ struct optcode {
 /* 8 - x-abs x-rel    */
 
 #define OP_SIZE_MAX 12
+#define CPU_STR "HUC6280"
+#define WLA_NAME "huc6280"
 
 #ifdef AMIGA
 struct optcode {
@@ -236,6 +244,8 @@ struct optcode {
 /* 4 - x (absolute)   */
 
 #define OP_SIZE_MAX 12
+#define CPU_STR "MCS6510"
+#define WLA_NAME "6512"
 
 #ifdef AMIGA
 struct optcode {
@@ -275,6 +285,8 @@ struct optcode {
 /* d - x ~ x (even) [1, 2] */
 
 #define OP_SIZE_MAX 12
+#define CPU_STR "SPC700"
+#define WLA_NAME "spc700"
 
 #ifdef AMIGA
 struct optcode {
@@ -313,6 +325,8 @@ struct optcode {
 /* a - * x        24b */
 
 #define OP_SIZE_MAX 20
+#define CPU_STR "Z80"
+#define WLA_NAME "z80"
 
 #ifdef AMIGA
 struct optcode {
@@ -355,6 +369,8 @@ struct optcode {
 /* a - x (absolute)   */
 
 #define OP_SIZE_MAX 16
+#define CPU_STR "W65816"
+#define WLA_NAME "65816"
 
 #ifdef AMIGA
 struct optcode {
@@ -372,6 +388,13 @@ struct optcode {
 };
 #endif
 
+#endif
+
+#ifndef WLA_NAME
+  #error "Unknown WLA_NAME!"
+#endif
+#ifndef CPU_STR
+  #error "Unknown CPU_STR!"
 #endif
 
 
