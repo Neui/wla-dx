@@ -95,6 +95,8 @@
 /* 9 - *          16b */
 
 #define OP_SIZE_MAX 16
+#define ARCH_STR "GB-Z80"
+#define WLA_NAME "gb"
 
 #endif
 
@@ -114,6 +116,8 @@
 
 #define OP_SIZE_MAX 12
 #define BASED_ON_6502 1
+#define ARCH_STR "6502"
+#define WLA_NAME "6502"
 
 #endif
 
@@ -134,6 +138,8 @@
 
 #define OP_SIZE_MAX 12
 #define BASED_ON_6502 1
+#define ARCH_STR "WDC65C02"
+#define WLA_NAME "65c02"
 
 #endif
 
@@ -157,6 +163,8 @@
 
 #define OP_SIZE_MAX 12
 #define BASED_ON_6502 1
+#define ARCH_STR "HUC6280"
+#define WLA_NAME "huc6280"
 
 #endif
 
@@ -176,6 +184,8 @@
 
 #define OP_SIZE_MAX 12
 #define BASED_ON_6502 1
+#define ARCH_STR "MSC6510"
+#define WLA_NAME "6510"
 
 #endif
 
@@ -200,6 +210,8 @@
 /* f - ? (13-bit) ~ */
 
 #define OP_SIZE_MAX 12
+#define ARCH_STR "SPC700"
+#define WLA_NAME "spc700"
 
 #endif
 
@@ -224,6 +236,8 @@
 /* a - * x        24b */
 
 #define OP_SIZE_MAX 20
+#define ARCH_STR "Z80"
+#define WLA_NAME "z80"
 
 #endif
 
@@ -248,6 +262,8 @@
 /* a - x (absolute)   */
 
 #define OP_SIZE_MAX 16
+#define ARCH_STR "W65816"
+#define WLA_NAME "65816"
 
 #endif
 
@@ -275,6 +291,13 @@ struct optcode {
   amiga_short int skip_xbit;
 #endif
 };
+
+#ifndef WLA_NAME
+  #error "Unknown WLA_NAME!"
+#endif
+#ifndef ARCH_STR
+  #error "Unknown ARCH_STR!"
+#endif
 
 
 #define DEFINITION_TYPE_VALUE         0
