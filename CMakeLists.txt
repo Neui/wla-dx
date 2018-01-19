@@ -66,6 +66,23 @@ add_subdirectory(wlab)
 add_subdirectory(wlalink)
 add_subdirectory(doc)
 
+add_custom_target(generators)
+
+if(CMAKE_CROSSCOMPILING)
+    set(IMPORT_GENERATORS "IMPORT_GENERATORS-NOTFOUND"
+        CACHE FILEPATH "ImportGenerators.cmake of a native build")
+    set(CROSSCOMPILING_EMULATOR "${CMAKE_CROSSCOMPILING_EMULATOR}"
+        CACHE FILEPATH "Path/Command to an emulator that can execute foreign code")
+    if(CROSSCOMPILING_EMULATOR)
+        message(STATUS "Using crosscompiling emulator: ${CROSSCOMPILING_EMULATOR}")
+        set(EMU "${CROSSCOMPILING_EMULATOR}") # Easier to write
+    else()
+        include("${IMPORT_GENERATORS}")
+        set(GEN_PREFIX native-)
+    endif()
+endif()
+
+
 # WLA-ARCH executables
 set(WLA_SRCS
     main.c
@@ -88,20 +105,26 @@ foreach(ARCH IN LISTS ARCHS)
     string(TOUPPER "${ARCH}" ARCH_UPPER) # For COMPILE_DEFINITION
 
     # Generate opcode table
-    add_executable(gen-${ARCH_TARGET}
-        "opcode_table_generator.c"
-        "opcodes_${ARCH_TARGET}.c"
-        )
-    set_property(TARGET gen-${ARCH_TARGET} APPEND PROPERTY
-        COMPILE_DEFINITIONS "${ARCH_UPPER}")
-    set_property(TARGET gen-${ARCH_TARGET} PROPERTY
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/op_tbl_gen/")
+    if(NOT CMAKE_CROSSCOMPILING OR CROSSCOMPILING_EMULATOR)
+        add_executable(gen-${ARCH_TARGET}
+            "opcode_table_generator.c"
+            "opcodes_${ARCH_TARGET}.c"
+            )
+        set_property(TARGET gen-${ARCH_TARGET} APPEND
+            PROPERTY COMPILE_DEFINITIONS
+                "${ARCH_UPPER}"
+            )
+        set_property(TARGET gen-${ARCH_TARGET} PROPERTY
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/op_tbl_gen/")
+        list(APPEND GENERATOR_TARGETS gen-${ARCH_TARGET})
+        add_dependencies(generators gen-${ARCH_TARGET})
+    endif()
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/op_tbl_gen/")
     set(TABLE_GEN_OUTPUT
         "${CMAKE_BINARY_DIR}/op_tbl_gen/opcodes_${ARCH_TARGET}_tables.c")
     add_custom_command(
         OUTPUT "${TABLE_GEN_OUTPUT}"
-        COMMAND gen-${ARCH_TARGET} "${TABLE_GEN_OUTPUT}"
-        DEPENDS gen-${ARCH_TARGET}
+        COMMAND ${EMU} $<TARGET_FILE:${GEN_PREFIX}gen-${ARCH_TARGET}> "${TABLE_GEN_OUTPUT}"
         )
 
     # Generate actual wla binary
@@ -109,8 +132,14 @@ foreach(ARCH IN LISTS ARCHS)
         ${WLA_SRCS} "${TABLE_GEN_OUTPUT}"
         "opcodes_${ARCH_TARGET}.c"
         )
-    set_property(TARGET wla-${ARCH_TARGET} APPEND PROPERTY
-        COMPILE_DEFINITIONS "${ARCH_UPPER}")
     install(TARGETS wla-${ARCH_TARGET} DESTINATION bin)
 endforeach(ARCH)
+
+if(NOT CMAKE_CROSSCOMPILING)
+    export(TARGETS ${GENERATOR_TARGETS}
+        FILE "${CMAKE_BINARY_DIR}/ImportGenerators.cmake"
+        NAMESPACE native-
+        )
+endif()
+
 
