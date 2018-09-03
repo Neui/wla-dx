@@ -116,6 +116,33 @@ setup_amiga_gcc() {
     setup_gcc
     RM=delete
     CFLAGS_MISC=-DUNIX
+}
+
+SETUPS="$SETUPS watcom16"
+setup_watcom16() {
+    setup_watcom32
+    CC=WCC
+    CFLAGS_MISC="$CFLAGS_MISC -mm"
+    test -z "$1" || "$*"
+}
+
+SETUPS="$SETUPS watcom32"
+setup_watcom32() {
+    setup_posix
+    RM=del
+    EXT=.exe
+    CC=WCC386
+    CC_TEMPLATE="\$(CC) \$(DEBUGFLAGS) {flags} \$(CFLAGS_ALL) -c {in} -fo={out}"
+    CFLAGS_MISC="-za -w=4 -DMSDOS=1"
+    CFLAGS_OPT=-oz
+    LD=WLINK
+    LDFLAGS_SRCS="FILE {%s}"
+    LD_TEMPLATE="\$(LD) \$(LDFLAGS_ALL) {in} {libs} NAME {out}"
+    LDLIBS=" "
+    LDLIBS_GEN=" "
+    NO_POSIX=1
+    BACKSLASH_SRC_DIR=1
+    BACKSLASH_BIN_DIR=1
     test -z "$1" || "$*"
 }
 
