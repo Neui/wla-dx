@@ -142,6 +142,8 @@ LDFLAGS_ALL=${LDFLAGS_MISC} \$(LDFLAGS)
 LDLIBS=${LDLIBS}
 LDLIBS_GEN=${LDLIBS_GEN}
 
+.SUFFIXES:
+.SUFFIXES: .o $(cc '.o\1') .c
 .c.o:
 	$(cc_template '\$*.c' "\$@" "")
 
@@ -187,7 +189,6 @@ WLA_${W}_GENO=\$(WLA_${W}_GEN:.c=.${OW})
 WLA_${W}_GENS=opcodes_${W}_tables.c opcodes_${W}.c
 WLA_${W}_GENSO=\$(WLA_${W}_GENS:.c=.${OW})
 WLA_${W}_FLAGS=$(printf -- "$COMPILE_DEF" "${D}=1")
-.SUFFIXES: .${OW}
 .c.${OW}:
 	$(cc_template '\$*.c' "\$@" "\$(WLA_${W}_FLAGS)")
 wla-${W}: $(bindir)wla-${W}\$(EXT)
