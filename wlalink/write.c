@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define WLALINK
 #include "defines.h"
 #include "memory.h"
 #include "write.h"

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define WLAB
 #include "main.h"
 #include "defines.h"
 

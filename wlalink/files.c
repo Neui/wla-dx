@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define WLALINK
 #include "defines.h"
 #include "parse.h"
 #include "files.h"

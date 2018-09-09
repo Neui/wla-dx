@@ -1,6 +1,16 @@
-
+#ifdef __WATCOMC__
+    /* watcom prefers defines.h in the current directory, so redirect */
+    #ifdef WLAB
+        #include "wlab/defines.h"
+    #elif defined(WLALINK)
+        #include "wlalink/defines.h"
+    #endif
+    /* Make sure not to inlcude this */
+    #define _DEFINES_H
+#else
 #include "hashmap.h"
 #include "shared.h"
+#endif
 
 #ifndef _DEFINES_H
 #define _DEFINES_H
