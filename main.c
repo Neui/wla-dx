@@ -521,7 +521,8 @@ void procedures_at_exit(void) {
 
 int generate_tmp_name(char **filename) {
 #if defined(UNIX) || defined(WIN32)
-  static char normal[32];
+  static char name[32]; /* Should be enough */
+  int status;
   int pid;
   #if defined(UNIX)
     pid = (int)getpid();
@@ -530,8 +531,13 @@ int generate_tmp_name(char **filename) {
   #else
     #error Invalid configuration!
   #endif
-  sprintf(normal, ".wla%da", pid);
-  *filename = normal;
+  status = sprintf(name, ".wla%da", pid) + 1;
+  if (status > (int)sizeof(name)) {
+    fprintf(stderr, "MAIN: Temp filename exceeded limit: %d > %d\n",
+        (int)sizeof(name), status);
+    abort();
+  }
+  *filename = name;
 #else /* AMIGA, WIN32, MSDOS and others */
   *filename = "wla_a.tmp";
 #endif
