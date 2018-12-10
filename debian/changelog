@@ -1,3 +1,27 @@
+wla-dx (9.7-1) unstable; urgency=medium
+
+  * Now uses CMake as the default build system
+  * 
+  * Add INSTANCEOF to .STRUCT
+  * Add ALIGN to .RAMSECTION
+  * .RAMSECTION now uses BANK; WLA DX now supports RAM banks
+  * Check .ENDB when in .BLOCK
+  * "\1.w" assiciates the ".w" part with the "\1" part
+  * Recursive macros with recursive argument references works now
+  * .ASC can now map also byte data
+  * Macros calling a macro making complex use of e.g. \1, \2, \@ and \!
+    should now work much better than before.
+  * Added .COUNTRYCODE
+  * Added .GBHEADER
+  * Added .ASCII commands to strings and .DL for 65816
+  * Added .NINTENDOLOGO
+  * Added .DESTINATIONCODE as an alias for COUNTRYCODE #91
+  * Added sphinx-based docs, includes manfiles
+  * MAX_NAME_LENGTH is now 255 instead of 63 -> longer (label) names possible
+  * Respect `.BASE` when writing non-65816 symbol files
+
+ -- Neui <neuisen@googlemail.com>  Tue, 11 Dec 2018 00:06:37 +0100
+
 wla-dx (9.6-1) unstable; urgency=medium
 
   * Bump version to 9.6
