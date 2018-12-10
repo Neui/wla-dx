@@ -1,0 +1,18 @@
+Source: wla-dx
+Section: devel
+Priority: optional
+Maintainer: Neui <neuisen@googlemail.com>
+Build-Depends: debhelper (>= 10)
+Standards-Version: 4.1.2
+Homepage: http://www.villehelin.com/wla.html
+Vcs-Git: https://github.com/Neui/wla-dx.git -b debian
+Vcs-Browser: https://github.com/vhelin/wla-dx.git
+
+Package: wla-dx
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Suggests: wla-dx-doc
+Description: Assembler and linker for old processors
+ Yet Another GB-Z80/Z80/6502/65C02/6510/65816/HUC6280/SPC-700 Multi Platform
+ Cross Assembler Package
+

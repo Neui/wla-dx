@@ -1,0 +1,49 @@
+#!/usr/bin/make -f
+
+DESTDIR="$(CURDIR)/debian/wla-dx"
+NUMJOBS=4
+ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+    NUMJOBS=$(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+endif
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	./unix.sh "$(NUMJOBS)"
+	# These manpages are horrorible, but needed because debian
+	mkdir -p debian/man
+	help2man -N -o debian/man/wla-6502.1 binaries/wla-6502
+	help2man -N -o debian/man/wla-6510.1 binaries/wla-6510
+	help2man -N -o debian/man/wla-65c02.1 binaries/wla-65c02
+	help2man -N -o debian/man/wla-gb.1 binaries/wla-gb
+	help2man -N -o debian/man/wla-huc6280.1 binaries/wla-huc6280
+	help2man -N -o debian/man/wla-spc700.1 binaries/wla-spc700
+	help2man -N -o debian/man/wla-z80.1 binaries/wla-z80
+	help2man -N -o debian/man/wlalink.1 binaries/wlalink
+	help2man -N -o debian/man/wlab.1 --no-discard-stderr binaries/wlab
+	help2man -N -o debian/man/wlad.1 --no-discard-stderr binaries/wlad
+
+override_dh_auto_clean:
+	rm -rf binaries/wla*
+	rm -rf *.o opcodes_*_tables.c wlalink/*.o wlab/*.o wlad/*.o
+	rm -rf makefile wlalink/makefile wlab/makefile wlad/makefile
+	rm -rf opcode_table_generator/makefile
+	rm -rf opcode_table_generator/create_tables.sh
+	rm -rf debian/man
+
+override_dh_auto_install:
+	# There is no easy way to "make install", but it's simple
+	# enough since you can just copy the binaries
+	mkdir -p $(DESTDIR)/usr/bin
+	cp -r binaries/* $(DESTDIR)/usr/bin
+
+override_dh_installdocs:
+	dh_installdocs
+	mkdir -p $(DESTDIR)/usr/share/doc/wla-dx/
+	cp README $(DESTDIR)/usr/share/doc/wla-dx/wla-dx.txt
+
+override_dh_installchangelogs:
+	dh_installchangelogs
+	gzip -9k CHANGELOG
+	mv CHANGELOG.gz $(DESTDIR)/usr/share/doc/wla-dx/changelog.gz

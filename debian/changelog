@@ -1,0 +1,6 @@
+wla-dx (9.6-1) unstable; urgency=medium
+
+  * Bump version to 9.6
+  * Version is featured in git
+
+ -- Neui <neuisen@googlemail.com>  Mon, 10 Dec 2018 10:56:00 +0100

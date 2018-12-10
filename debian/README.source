@@ -1,0 +1,12 @@
+wla-dx for Debian
+----------------
+
+This version still uses a "custom" build system, using shell scripts to drive
+the makefiles, which actually builds a part of it.
+
+If you're building from git, you might encounter "modified files" message
+for 3 files. git wants to modify them, but it can't be done since then it
+wouldn't be the "original" source.
+
+ -- Neui <neuisen@googlemail.com>  Mon, 10 Dec 2018 10:54:17 +0100
+
