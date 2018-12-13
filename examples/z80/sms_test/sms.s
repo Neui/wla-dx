@@ -4,6 +4,11 @@
 ; written by ville helin <vhelin@cc.hut.fi> in 2001-2008
 ;»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»
 
+.define ABC 0-1
+.printt "ABC = "
+.printv dec ABC
+.printt "\n"
+	
 .MEMORYMAP
    DEFAULTSLOT     0
    ; ROM area
@@ -103,12 +108,39 @@ _nams:	.dw _nams+1
 _nams:	.dw _nams+1
 .ends
 
+.bank 0
+.org $500
+.section "LocalLabelsTest" semifree
+
+BOOM1:
+.db "HELLOMOTO"
+
+.db _f & $ff
+OOPS1:
+.dw _F
+OOPS2:
+OOPS3
+__				; here it is! :D
+OOPS4:
+OOPS5
+OOPS6
+.dw _b
+.dw _B
+OOPS7:
+.dw _b & $ff
+
+.db "BYEMOTO"
+
+BOOM2:
+.ends
+
 
 ;»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»
 ; standard stuff?
 ;»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»
 
-.bank 0 slot 0
+.define issue11 10
+.bank issue11-10 slot 6+issue11-4-2-10
 .org $300
 
 done:
@@ -130,12 +162,17 @@ bone:
 	.db counter + 1
 	.endr
 	.db $ff
+	.db "MARKER1"
+	sub	ixh
+	sub	ixl
+	.db "MARKER2"
 
 __
 
 .BANK 0 SLOT 1
 .ORGA $5000
 
+.dw BOOM1
 .dw caddr, CADDR+1, caddr+1, CADDR+1, 1+CADDR+2-2
 .db $ff, $ff, $ff, $ff
 
@@ -199,3 +236,19 @@ dragon    INSTANCEOF mon   ; one mon
 
 	ld hl, dragon
 	call dragon
+
+;»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»
+; .incbin test
+;»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»»
+
+.macro macroOne 		; the input byte is \1, the output byte is "_out"
+.redefine _out \1+1
+.endm
+	
+data1a:	.incbin "data1/data.txt" skip 1 filter macroOne
+data2a:	.incbin "data2/data.txt" skip 1 filter macroOne
+	.incdir "data1"
+data1b:	.incbin "data.txt" skip 1 filter macroOne
+	.incbin "data3/data.txt"
+	.incdir "data2"
+data2b:	.incbin "data.txt" skip 1 filter macroOne

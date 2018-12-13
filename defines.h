@@ -1,10 +1,11 @@
+#include "hashmap.h"
 
 #ifndef _DEFINES_H
 #define _DEFINES_H
 
 /* want to use longer strings and labels? change this */
 
-#define MAX_NAME_LENGTH 64
+#define MAX_NAME_LENGTH 255
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -88,13 +89,13 @@
 /* O - origin              */
 /* o - absolute origin     */
 /* B - ROM bank            */
-/* b - BASE (65816)        */
+/* b - BASE                */
 /* L - label               */
-/* r - 16bit reference     */
-/* R - 8bit pc ref         */
-/* M - 16bit pc ref        */
-/* Q - 8bit reference      */
-/* q - 24bit reference     */
+/* r - 16-bit reference    */
+/* R - 8-bit pc ref        */
+/* M - 16-bit pc ref       */
+/* Q - 8-bit reference     */
+/* q - 24-bit reference    */
 /* S - section             */
 /* s - end of section      */
 /* x - dsb                 */
@@ -416,7 +417,12 @@ struct definition {
   double value;
   int    type;
   int    size;
-  struct definition *next;
+};
+
+struct append_section {
+  char section[MAX_NAME_LENGTH];
+  char append_to[MAX_NAME_LENGTH];
+  struct append_section *next;
 };
 
 struct macro_argument {
@@ -474,11 +480,10 @@ struct label_def {
   int  address; /* in bank */
   int  bank;
   int  slot;
-#ifdef W65816
   int  base;
-#endif
   int  filename_id;
   int  linenumber;
+  struct section_def *section_struct;
   struct label_def *next;
 };
 
@@ -501,7 +506,14 @@ struct section_def {
   int  *listfile_ints;
   char *listfile_cmds;
   unsigned char *data;
+  struct namespace_def *nspace;
+  struct map_t *label_map;
   struct section_def *next;
+};
+
+struct namespace_def {
+  char name[MAX_NAME_LENGTH];
+  struct map_t *label_map;
 };
 
 struct incbin_file_data {
@@ -538,6 +550,8 @@ struct slot {
 struct block {
   char name[MAX_NAME_LENGTH];
   int  address;
+  int  filename_id;
+  int  line_number;
   struct block *next;
 };
 
@@ -593,9 +607,7 @@ struct stack {
   int bank;
   int slot;
   int relative_references;
-#ifdef W65816
   int base;
-#endif
   int section_status;
   int section_id;
   int address;

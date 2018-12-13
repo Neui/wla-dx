@@ -16,14 +16,15 @@ int input_number_error_msg = YES, ss, string_size, input_float_mode = OFF, parse
 int newline_beginning = ON, parsed_double_decimal_numbers = 0;
 char label[MAX_NAME_LENGTH], xyz[256];
 char unevaluated_expression[256];
-char expanded_macro_string[256];
+char expanded_macro_string[MAX_NAME_LENGTH+1];
 double parsed_double;
 
 extern int i, size, d, macro_active;
 extern char *buffer, tmp[4096], cp[256];
 extern struct active_file_info *active_file_info_first, *active_file_info_last, *active_file_info_tmp;
-extern struct definition *defines, *tmp_def, *next_def;
-extern struct macro_runtime *macro_runtime_current;
+extern struct definition *tmp_def;
+extern struct map_t *defines_map;
+extern struct macro_runtime *macro_stack, *macro_runtime_current;
 extern int latest_stack;
 
 #if defined(MCS6502) || defined(W65816) || defined(MCS6510) || defined(WDC65C02) || defined(HUC6280)
@@ -90,7 +91,7 @@ int compare_next_token(char *token, int length) {
 int input_next_string(void) {
 
   char e;
-  int k, d;
+  int k;
 
   
   /* skip white space */
@@ -125,10 +126,8 @@ int input_next_string(void) {
 
   /* expand e.g., \1 and \@ */
   if (macro_active != 0) {
-    if (expand_macro_arguments(tmp, &d) == FAILED)
+    if (expand_macro_arguments(tmp) == FAILED)
       return FAILED;
-    if (d != 0)
-      strcpy(tmp, expanded_macro_string);
   }
 
   return SUCCEEDED;
@@ -137,6 +136,7 @@ int input_next_string(void) {
 
 int input_number(void) {
 
+  char label_tmp[MAX_NAME_LENGTH];
   unsigned char e, ee;
   int k, p, q;
   double decimal_mul;
@@ -222,6 +222,28 @@ int input_number(void) {
       return FAILED;
     }
 
+    /* does the MACRO argument number end with a .b/.w/.l? */
+
+#if defined(MCS6502) || defined(W65816) || defined(MCS6510) || defined(WDC65C02) || defined(HUC6280)
+    if (e == '.') {
+      e = buffer[i+1];
+      if (e == 'b' || e == 'B') {
+	operand_hint = HINT_8BIT;
+	i += 2;
+      }
+      else if (e == 'w' || e == 'W') {
+	operand_hint = HINT_16BIT;
+	i += 2;
+      }
+#if defined(W65816)
+      else if (e == 'l' || e == 'L') {
+	operand_hint = HINT_24BIT;
+	i += 2;
+      }
+#endif
+    }
+#endif
+
     return k;
   }
 
@@ -281,6 +303,20 @@ int input_number(void) {
       }
 #endif
     }
+#if defined(W65186)
+    if (d > 0xFFFF && d <= 0xFFFFFF)
+      operand_hint = HINT_24BIT;
+    else if (d > 0xFF)
+      operand_hint = HINT_16BIT;
+    else
+      operand_hint = HINT_8BIT;
+		
+#elif defined(MCS6502) || defined(MCS6510) || defined(WDC65C02) || defined(HUC6280)
+    if (d > 0xFF && d <= 0xFFFF)
+      operand_hint = HINT_16BIT;
+    else
+      operand_hint = HINT_8BIT;
+#endif
 #endif
 
     return SUCCEEDED;
@@ -342,12 +378,31 @@ int input_number(void) {
 	}
 #endif
       }
+      else if ((e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z')) {
+	/* a number directly followed by a letter when parsing a integer/float -> syntax error */
+	print_error("Syntax error.\n", ERROR_NUM);
+	return FAILED;
+      }
       else
 	break;
     }
 
     /* drop the decimals */
     d = parsed_double;
+#if defined(W65186)
+    if (d > 0xFFFF && d <= 0xFFFFFF)
+      operand_hint = HINT_24BIT;
+    else if (d > 0xFF)
+      operand_hint = HINT_16BIT;
+    else
+      operand_hint = HINT_8BIT;
+		
+#elif defined(MCS6502) || defined(MCS6510) || defined(WDC65C02) || defined(HUC6280)
+    if (d > 0xFF && d <= 0xFFFF)
+      operand_hint = HINT_16BIT;
+    else
+      operand_hint = HINT_8BIT;
+#endif
 
     if (q == 1 && input_float_mode == ON)
       return INPUT_NUMBER_FLOAT;
@@ -427,12 +482,9 @@ int input_number(void) {
 
     /* expand e.g., \1 and \@ */
     if (macro_active != 0) {
-      if (expand_macro_arguments(label, &d) == FAILED)
+      if (expand_macro_arguments(label) == FAILED)
 	return FAILED;
-      if (d != 0) {
-	strcpy(label, expanded_macro_string);
-	k = strlen(label);
-      }
+      k = strlen(label);
     }
 
     if (k == MAX_NAME_LENGTH - 1) {
@@ -494,37 +546,61 @@ int input_number(void) {
 
   /* expand e.g., \1 and \@ */
   if (macro_active != 0) {
-    if (expand_macro_arguments(label, &d) == FAILED)
+    if (expand_macro_arguments(label) == FAILED)
       return FAILED;
-    if (d != 0)
-      strcpy(label, expanded_macro_string);
   }
 
+  /* label_tmp contains the label without possible prefix ':' */
+  if (strlen(label) > 1 && label[0] == ':')
+    strcpy(label_tmp, &label[1]);
+  else
+    strcpy(label_tmp, label);
+  
   /* check if the label is actually a definition */
-  tmp_def = defines;
-  while (tmp_def != NULL) {
-    if (strcmp(label, tmp_def->alias) == 0) {
-      if (tmp_def->type == DEFINITION_TYPE_VALUE) {
-	d = tmp_def->value;
-	return SUCCEEDED;
-      }
-      else if (tmp_def->type == DEFINITION_TYPE_STACK) {
-	/* skip stack definitions -> use its name instead */
-      }
-      else if (tmp_def->type == DEFINITION_TYPE_ADDRESS_LABEL) {
-	string_size = tmp_def->size;
-	memcpy(label, tmp_def->string, string_size);
-	label[string_size] = 0;
-	return INPUT_NUMBER_ADDRESS_LABEL;
+  if (hashmap_get(defines_map, label, (void*)&tmp_def) != MAP_OK)
+    hashmap_get(defines_map, label_tmp, (void*)&tmp_def);
+  if (tmp_def != NULL) {
+    if (tmp_def->type == DEFINITION_TYPE_VALUE) {
+      d = tmp_def->value;
+#if defined(W65186)
+      if (d > 0xFFFF && d <= 0xFFFFFF)
+        operand_hint = HINT_24BIT;
+      else if (d > 0xFF)
+        operand_hint = HINT_16BIT;
+      else
+        operand_hint = HINT_8BIT;
+
+#elif defined(MCS6502) || defined(MCS6510) || defined(WDC65C02) || defined(HUC6280)
+      if (d > 0xFF && d <= 0xFFFF)
+        operand_hint = HINT_16BIT;
+      else
+        operand_hint = HINT_8BIT;
+#endif
+      return SUCCEEDED;
+    }
+    else if (tmp_def->type == DEFINITION_TYPE_STACK) {
+      latest_stack = (int)tmp_def->value;
+      return INPUT_NUMBER_STACK;
+    }
+    else if (tmp_def->type == DEFINITION_TYPE_ADDRESS_LABEL) {
+      if (label[0] == ':') {
+        /* we need to keep the ':' prefix */
+        sprintf(label, ":%s%c", tmp_def->string, 0);
+        string_size = tmp_def->size + 1;
       }
       else {
-	string_size = tmp_def->size;
-	memcpy(label, tmp_def->string, string_size);
-	label[string_size] = 0;
-	return INPUT_NUMBER_STRING;
+        string_size = tmp_def->size;
+        memcpy(label, tmp_def->string, string_size);
+        label[string_size] = 0;
       }
+      return INPUT_NUMBER_ADDRESS_LABEL;
     }
-    tmp_def = tmp_def->next;
+    else {
+      string_size = tmp_def->size;
+      memcpy(label, tmp_def->string, string_size);
+      label[string_size] = 0;
+      return INPUT_NUMBER_STRING;
+    }
   }
 
   return INPUT_NUMBER_ADDRESS_LABEL;
@@ -533,9 +609,6 @@ int input_number(void) {
 
 int get_next_token(void) {
 
-  int q;
-
-  
   while (1) {
     if (i == size)
       break;
@@ -571,12 +644,9 @@ int get_next_token(void) {
 
     /* expand e.g., \1 and \@ */
     if (macro_active != 0) {
-      if (expand_macro_arguments(tmp, &q) == FAILED)
+      if (expand_macro_arguments(tmp) == FAILED)
 	return FAILED;
-      if (q != 0) {
-	strcpy(tmp, expanded_macro_string);
-	ss = strlen(tmp);
-      }
+      ss = strlen(tmp);
     }
 
     return GET_NEXT_TOKEN_STRING;
@@ -616,12 +686,9 @@ int get_next_token(void) {
 
   /* expand e.g., \1 and \@ */
   if (macro_active != 0) {
-    if (expand_macro_arguments(tmp, &q) == FAILED)
+    if (expand_macro_arguments(tmp) == FAILED)
       return FAILED;
-    if (q != 0) {
-      strcpy(tmp, expanded_macro_string);
-      ss = strlen(tmp);
-    }
+    ss = strlen(tmp);
   }
 
   return SUCCEEDED;
@@ -654,117 +721,144 @@ int skip_next_token(void) {
 }
 
 
-int _expand_macro_arguments(char *in, int *expands) {
+int _expand_macro_arguments_one_pass(char *in, int *expands, int *move_up) {
 
-  char t[256];
-  int i, k, d;
+  char t[MAX_NAME_LENGTH + 1];
+  int i, j, k;
 
+
+  memset(expanded_macro_string, 0, MAX_NAME_LENGTH + 1);
   
-  for (i = 0; i < MAX_NAME_LENGTH; i++) {
+  for (i = 0, k = 0; i < MAX_NAME_LENGTH && k < MAX_NAME_LENGTH; i++) {
     if (in[i] == '\\') {
       if (in[i + 1] == '"' || in[i + 1] == 'n' || in[i + 1] == '\\') {
-	expanded_macro_string[i] = in[i];
+	expanded_macro_string[k++] = in[i];
 	i++;
-	expanded_macro_string[i] = in[i];
-	continue;
+	expanded_macro_string[k++] = in[i];
       }
-      break;
+      else if (in[i + 1] == '@') {
+	/* we found '@' -> expand! */
+	(*expands)++;
+	i++;
+
+	sprintf(t, "%d%c", macro_runtime_current->macro->calls - 1, 0);
+	for (j = 0; j < MAX_NAME_LENGTH && k < MAX_NAME_LENGTH; j++, k++) {
+	  expanded_macro_string[k] = t[j];
+	  if (t[j] == 0)
+	    break;
+	}
+      }
+      else if (in[i + 1] == '!') {
+	/* we found '!' -> expand! */
+	(*expands)++;
+	i++;
+
+	sprintf(t, "%s%c", get_file_name(active_file_info_last->filename_id), 0);
+	for (j = 0; j < MAX_NAME_LENGTH && k < MAX_NAME_LENGTH; j++, k++) {
+	  expanded_macro_string[k] = t[j];
+	  if (t[j] == 0)
+	    break;
+	}
+      }
+      else if (in[i + 1] >= '0' && in[i + 1] <= '9') {
+	/* handle numbers, e.g., \1 */
+	int d = 0;
+
+	(*expands)++;
+	(*move_up)++;
+	i++;
+	for (; i < MAX_NAME_LENGTH && in[i] != 0; i++) {
+	  if (in[i] >= '0' && in[i] <= '9')
+	    d = (d * 10) + in[i] - '0';
+	  else
+	    break;
+	}
+	i--;
+
+	if (d > macro_runtime_current->supplied_arguments) {
+	  if (input_number_error_msg == YES) {
+	    sprintf(xyz, "Macro \"%s\" wasn't called with enough arguments, \\%d is out of range.\n", macro_runtime_current->macro->name, d);
+	    print_error(xyz, ERROR_NUM);
+	  }
+    
+	  return FAILED;
+	}
+
+	d = macro_runtime_current->argument_data[d - 1]->start;
+
+	for (; k < MAX_NAME_LENGTH; d++, k++) {
+	  if (buffer[d] == 0 || buffer[d] == ' ' || buffer[d] == 0x0A || buffer[d] == ',')
+	    break;
+	  expanded_macro_string[k] = buffer[d];
+	}
+      }
+      else {
+	if (input_number_error_msg == YES) {
+	  sprintf(xyz, "EXPAND_MACRO_ARGUMENTS: Unsupported special character '%c'.\n", in[i + 1]);
+	  print_error(xyz, ERROR_NUM);
+	}
+    
+	return FAILED;
+      }
     }
-    expanded_macro_string[i] = in[i];
+    else
+      expanded_macro_string[k++] = in[i];
 
     if (in[i] == 0)
-      return SUCCEEDED;
+      break;
   }
 
-  k = i;
-  i++;
-
-  (*expands)++;
-
-  if (in[i] == '@') {
-    i++;
-    sprintf(&expanded_macro_string[k], "%d%c", macro_runtime_current->macro->calls - 1, 0);
-    k = strlen(expanded_macro_string);
-
-    for (; i < MAX_NAME_LENGTH; i++, k++) {
-      expanded_macro_string[k] = in[i];
-      if (in[i] == 0)
-	break;
+  if (k >= MAX_NAME_LENGTH) {
+    if (input_number_error_msg == YES) {
+      sprintf(xyz, "EXPAND_MACRO_ARGUMENTS: The result string is too large, increate MAX_NAME_LENGTH and compile WLA DX again.\n");
+      print_error(xyz, ERROR_NUM);
     }
-
-    strcpy(t, expanded_macro_string);
-    _expand_macro_arguments(t, &d);
-
-    return SUCCEEDED;
+    
+    return FAILED;
   }
   
-  if (in[i] == '!') {
-    i++;
-    sprintf(&expanded_macro_string[k], "%s%c", get_file_name(active_file_info_last->filename_id), 0);
-    k = strlen(expanded_macro_string);
-
-    for (; i < MAX_NAME_LENGTH; i++, k++) {
-      expanded_macro_string[k] = in[i];
-      if (in[i] == 0)
-	break;
-    }
-
-    strcpy(t, expanded_macro_string);
-    _expand_macro_arguments(t, &d);
-
-    return SUCCEEDED;
-  }
-
-  if (in[i] <= '0' || in[i] >= '9') {
-    if (input_number_error_msg == YES) {
-      sprintf(xyz, "EXPAND_MACRO_ARGUMENTS: Unsupported special character '%c'.\n", in[i]);
-      print_error(xyz, ERROR_NUM);
-    }
-    
-    return FAILED;
-  }
-
-  for (d = 0; in[i] != 0; i++) {
-    if (in[i] >= '0' && in[i] <= '9')
-      d = (d * 10) + in[i] - '0';
-    else
-      break;
-  }
-
-  if (d > macro_runtime_current->supplied_arguments) {
-    if (input_number_error_msg == YES) {
-      sprintf(xyz, "Macro \"%s\" wasn't called with enough arguments.\n", macro_runtime_current->macro->name);
-      print_error(xyz, ERROR_NUM);
-    }
-    
-    return FAILED;
-  }
-
-  d = macro_runtime_current->argument_data[d - 1]->start;
-
-  for (; k < MAX_NAME_LENGTH; d++, k++) {
-    if (buffer[d] == 0 || buffer[d] == ' ' || buffer[d] == 0x0A || buffer[d] == ',')
-      break;
-    expanded_macro_string[k] = buffer[d];
-  }
-
-  for (; k < MAX_NAME_LENGTH; i++, k++) {
-    expanded_macro_string[k] = in[i];
-    if (in[i] == 0) {
-      break;
-    }
-  }
-
-  strcpy(t, expanded_macro_string);
-  _expand_macro_arguments(t, &d);
-
+  strncpy(in, expanded_macro_string, MAX_NAME_LENGTH);
+	
   return SUCCEEDED;
 }
 
 
-int expand_macro_arguments(char *in, int *expands) {
+int _expand_macro_arguments(char *in, int *expands) {
 
-  *expands = 0;
+  int move_up;
 
-  return _expand_macro_arguments(in, expands);
+
+  move_up = 0;
+  if (_expand_macro_arguments_one_pass(in, expands, &move_up) == FAILED)
+    return FAILED;
+
+  /* macro argument numbers? if we find and expand some, we'll need to recursively call this function */
+  if (move_up > 0) {
+    /* move up one macro call in the hierarchy */
+    macro_active--;
+    if (macro_active > 0) {
+      macro_runtime_current = &macro_stack[macro_active - 1];
+      /* recursive call to self */
+      return _expand_macro_arguments(in, expands);
+    }
+  }
+
+  return SUCCEEDED;
+}
+  
+
+int expand_macro_arguments(char *in) {
+
+  /* save the current macro_runtime pointers */
+  struct macro_runtime* mr = macro_runtime_current;
+  int ma = macro_active, ret = 0, expands = 0;
+  
+  
+  ret = _expand_macro_arguments(in, &expands);
+
+  /* return the current macro_runtime as recursive _expand_macro_arguments() might have modified it */
+  macro_runtime_current = mr;
+  macro_active = ma;
+
+  return ret;
 }

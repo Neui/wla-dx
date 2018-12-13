@@ -3,9 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "defines.h"
 
+#include "hashmap.h"
 #include "parse.h"
 #include "pass_1.h"
 #include "stack.h"
@@ -15,7 +17,8 @@
 extern int input_number_error_msg, bankheader_status, input_float_mode;
 extern int i, size, d, macro_active, string_size, section_status, parse_floats;
 extern char xyz[256], *buffer, tmp[4096], expanded_macro_string[256], label[MAX_NAME_LENGTH];
-extern struct definition *defines, *tmp_def, *next_def;
+extern struct definition *tmp_def;
+extern struct map_t *defines_map;
 extern struct active_file_info *active_file_info_first, *active_file_info_last, *active_file_info_tmp;
 extern struct macro_runtime *macro_runtime_current;
 extern struct section_def *sec_tmp;
@@ -309,7 +312,7 @@ int stack_calculate(char *in, int *value) {
 	  break;
 	else {
 	  if (input_number_error_msg == YES) {
-	    sprintf(xyz, "Got '%c' (%d) when expected (0/1).\n", e, e);
+	    sprintf(xyz, "Got '%c' (%d) when expected a 0 or 1.\n", e, e);
 	    print_error(xyz, ERROR_NUM);
 	  }
 	  return FAILED;
@@ -360,7 +363,7 @@ int stack_calculate(char *in, int *value) {
 	  break;
 	else {
 	  if (input_number_error_msg == YES) {
-	    sprintf(xyz, "Got '%c' (%d) when expected (0-F).\n", e, e);
+	    sprintf(xyz, "Got '%c' (%d) when expected [0-F].\n", e, e);
 	    print_error(xyz, ERROR_NUM);
 	  }
 	  return FAILED;
@@ -416,7 +419,7 @@ int stack_calculate(char *in, int *value) {
 	    break;
 	  else {
 	    if (input_number_error_msg == YES) {
-	      sprintf(xyz, "Got '%c' (%d) when expected (0-F).\n", e, e);
+	      sprintf(xyz, "Got '%c' (%d) when expected [0-F].\n", e, e);
 	      print_error(xyz, ERROR_NUM);
 	    }
 	    return FAILED;
@@ -468,7 +471,7 @@ int stack_calculate(char *in, int *value) {
 	  }
 	  else {
 	    if (input_number_error_msg == YES) {
-	      sprintf(xyz, "Got '%c' (%d) when expected (0-9).\n", e, e);
+	      sprintf(xyz, "Got '%c' (%d) when expected [0-9].\n", e, e);
 	      print_error(xyz, ERROR_NUM);
 	    }
 	    return FAILED;
@@ -820,21 +823,6 @@ int stack_calculate(char *in, int *value) {
     d++;
   }
 
-  /* DEBUG output
-     printf("STACK ID %d LINE %d\n", stack_id, active_file_info_last->line_current);
-     for (k = 0; k < d; k++) {
-     char ar[] = "+-*()|&/^«»%~<>";
-
-     if (ta[k].type == STACK_ITEM_TYPE_OPERATOR)
-     printf("%c ", ar[((int)ta[k].value)]);
-     else if (ta[k].type == STACK_ITEM_TYPE_VALUE)
-     printf("V(%f) ", ta[k].value);
-     else
-     printf("S(%s) ", ta[k].string);
-     }
-     printf("\n");
-  */
-
   /* are all the symbols known? */
   if (resolve_stack(ta, d) == SUCCEEDED) {
     s.stack = ta;
@@ -843,14 +831,14 @@ int stack_calculate(char *in, int *value) {
 
     if (compute_stack(&s, d, &dou) == FAILED)
       return FAILED;
-
+    
     if (input_float_mode == ON) {
       parsed_double = dou;
       return INPUT_NUMBER_FLOAT;
     }
 
     *value = (int)dou;
-
+    
     return SUCCEEDED;
   }
 
@@ -859,6 +847,41 @@ int stack_calculate(char *in, int *value) {
     strcpy(label, ta[0].string);
     return STACK_RETURN_LABEL;
   }
+
+  /*
+  printf("%d %d %s\n", d, ta[0].type, ta[0].string);
+  */
+
+#if WLA_DEBUG
+  /* DEBUG output */
+  printf("LINE %5d: (STACK) CALCULATION ID = %d (c%d): ", active_file_info_last->line_current, stack_id, stack_id);
+  for (k = 0; k < d; k++) {
+    char ar[] = "+-*()|&/^01%~<>";
+
+    if (ta[k].type == STACK_ITEM_TYPE_OPERATOR) {
+      int value = (int)ta[k].value;
+      char arr = ar[value];
+
+      /* 0 - shift left, 1 - shift right, otherwise it's the operator itself */
+      if (arr == '0')
+	printf("<<");
+      else if (arr == '1')
+	printf(">>");
+      else
+	printf("%c", arr);
+    }
+    else if (ta[k].type == STACK_ITEM_TYPE_VALUE)
+      printf("V(%f)", ta[k].value);
+    else if (ta[k].type == STACK_ITEM_TYPE_STACK)
+      printf("C(%d)", (int)ta[k].value);
+    else
+      printf("S(%s)", ta[k].string);
+
+    if (k < d-1)
+      printf(", ");
+  }
+  printf("\n");
+#endif
 
   /* we have a stack full of computation and we save it for wlalink */
   stacks_tmp = malloc(sizeof(struct stack));
@@ -917,7 +940,7 @@ int resolve_stack(struct stack_item s[], int x) {
 
   struct macro_argument *ma;
   struct stack_item *st;
-  int a, b, k, q = x;
+  int a, b, k, q = x, cannot_resolve = 0;
   char c;
 
 
@@ -978,35 +1001,38 @@ int resolve_stack(struct stack_item s[], int x) {
       else {
 	if (macro_active != 0) {
 	  /* expand e.g., \1 and \@ */
-	  if (expand_macro_arguments(s->string, &d) == FAILED)
+	  if (expand_macro_arguments(s->string) == FAILED)
 	    return FAILED;
-	  strcpy(s->string, expanded_macro_string);
 	}
 
-	tmp_def = defines;
-	while (tmp_def != NULL) {
-	  if (strcmp(tmp_def->alias, s->string) == 0) {
-	    if (tmp_def->type == DEFINITION_TYPE_STRING) {
-	      sprintf(xyz, "Definition \"%s\" is a string definition.\n", tmp_def->alias);
-	      print_error(xyz, ERROR_STC);
-	      return FAILED;
-	    }
-	    else if (tmp_def->type == DEFINITION_TYPE_STACK) {
-	      /* skip stack definitions -> use its name instead */
-	    }
-	    else {
-	      s->type = STACK_ITEM_TYPE_VALUE;
-	      s->value = tmp_def->value;
-	      break;
-	    }
+        hashmap_get(defines_map, s->string, (void*)&tmp_def);
+        if (tmp_def != NULL) {
+          if (tmp_def->type == DEFINITION_TYPE_STRING) {
+            sprintf(xyz, "Definition \"%s\" is a string definition.\n", tmp_def->alias);
+            print_error(xyz, ERROR_STC);
+            return FAILED;
+          }
+          else if (tmp_def->type == DEFINITION_TYPE_STACK) {
+	    /* skip stack definitions -> use its name instead, thus do nothing here */
+          }
+	  else if (tmp_def->type == DEFINITION_TYPE_ADDRESS_LABEL) {
+	    /* wla cannot resolve address labels (unless outside a section) -> only wlalink can do that */
+	    cannot_resolve = 1;
+	    strcpy(s->string, tmp_def->string);
 	  }
-	  tmp_def = tmp_def->next;
-	}
+	  else {
+            s->type = STACK_ITEM_TYPE_VALUE;
+            s->value = tmp_def->value;
+          }
+        }
       }
     }
     s++;
     x--;
   }
+
+  if (cannot_resolve != 0)
+    return FAILED;
 
   /* find a string or a stack and fail */
   while (q > 0) {
@@ -1023,7 +1049,7 @@ int resolve_stack(struct stack_item s[], int x) {
 int compute_stack(struct stack *sta, int x, double *result) {
 
   struct stack_item *s;
-  double v[256], q;
+  double v[256];
   int r, t, z;
 
 
@@ -1084,7 +1110,7 @@ int compute_stack(struct stack *sta, int x, double *result) {
 	t--;
 	break;
       case SI_OP_DIVIDE:
-	if (((int)v[t - 1]) == 0) {
+	if (v[t - 1] == 0.0) {
 	  fprintf(stderr, "%s:%d: COMPUTE_STACK: Division by zero.\n", get_file_name(sta->filename_id), sta->linenumber);
 	  return FAILED;
 	}
@@ -1092,10 +1118,7 @@ int compute_stack(struct stack *sta, int x, double *result) {
 	t--;
 	break;
       case SI_OP_POWER:
-	q = 1;
-	for (z = 0; z < v[t - 1]; z++)
-	  q *= v[t - 2];
-	v[t - 2] = q;
+	v[t - 2] = pow(v[t - 2], v[t - 1]);
 	t--;
 	break;
       case SI_OP_SHIFT_LEFT:
@@ -1110,17 +1133,19 @@ int compute_stack(struct stack *sta, int x, double *result) {
     }
   }
 
+  /*
 #ifdef W65816
   if (v[0] < -8388608 || v[0] > 16777215) {
-    print_error("Out of 24bit range.\n", ERROR_STC);
+    print_error("Out of 24-bit range.\n", ERROR_STC);
     return FAILED;
   }
 #else
   if (v[0] < -32768 || v[0] > 65536) {
-    print_error("Out of 16bit range.\n", ERROR_STC);
+    print_error("Out of 16-bit range.\n", ERROR_STC);
     return FAILED;
   }
 #endif
+  */
 
   *result = v[0];
 
@@ -1144,7 +1169,7 @@ int stack_create_label_stack(char *label) {
   stacks_tmp->bank = -123456;
   stacks_tmp->stacksize = 1;
   stacks_tmp->relative_references = 0;
-  stacks_tmp->stack = malloc(sizeof(struct stack_item) * 1);
+  stacks_tmp->stack = malloc(sizeof(struct stack_item));
   if (stacks_tmp->stack == NULL) {
     free(stacks_tmp);
     print_error("Out of memory error while allocating room for a new stack.\n", ERROR_STC);

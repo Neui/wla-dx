@@ -1,7 +1,32 @@
 #The makefile should in fact be ignored, because it will be generated automatically
 #from build scripts.
-#I do not know a good regex for this, so
-makefile
-MAKEFILE
-Makefile
+
+#Cmake files also need to go.
+
 opcodes_*_tables.c
+CMakeCache.txt
+cmake_install.cmake
+CMakeFiles/
+opcode_table_generator/makefile
+opcode_table_generator/CMakeFiles/
+wlalink/CMakeFiles/
+wlab/CMakeFiles/
+
+# Temporary files
+*.bak
+*.swp
+
+# Build directories
+/*build/
+
+*.pyc
+*.doctree
+
+# Visual Studio generated files
+*.vcxproj*
+.vs
+*.dir
+*.sln
+*.tlog
+*.VC.*
+*.log

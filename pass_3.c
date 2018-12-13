@@ -20,22 +20,28 @@ extern int verbose_mode, section_status, cartridgetype, output_format;
 
 
 struct label_def *label_next, *label_last, *label_tmp, *labels = NULL;
+struct map_t *global_unique_label_map = NULL;
 struct block *blocks = NULL;
+
+#define XSTRINGIFY(x) #x
+#define STRINGIFY(x) XSTRINGIFY(x)
+#define STRING_READ_FORMAT ("%" STRINGIFY(MAX_NAME_LENGTH) "s ")
 
 
 int pass_3(void) {
 
+  char emsg[256];
   struct section_def *s;
   struct label_def *l;
+  struct label_def *parent_labels[10];
   struct block *b;
   FILE *f_in;
   int bank = 0, slot = 0, add = 0, file_name_id = 0, inz, line_number = 0, o, add_old = 0;
-#ifdef W65816
   int base = 0x00;
-#endif
   char c;
+  int err;
 
-  
+  memset(parent_labels, 0, sizeof(parent_labels));
   s = NULL;
 
   if (verbose_mode == ON)
@@ -93,11 +99,9 @@ int pass_3(void) {
 	fprintf(stderr, "INTERNAL_PASS_1: .ORG needs to be set before any code/data can be accepted.\n");
 	return FAILED;
 
-#ifdef W65816
       case 'b':
 	fscanf(f_in, "%d ", &base);
 	continue;
-#endif
 
       case 'f':
 	fscanf(f_in, "%d ", &file_name_id);
@@ -114,14 +118,16 @@ int pass_3(void) {
       case 'g':
 	b = malloc(sizeof(struct block));
 	if (b == NULL) {
-	  fscanf(f_in, "%64s ", tmp);
+	  fscanf(f_in, STRING_READ_FORMAT, tmp);
 	  fprintf(stderr, "%s:%d INTERNAL_PASS_1: Out of memory while trying to allocate room for block \"%s\".\n",
 		  get_file_name(file_name_id), line_number, tmp);
 	  return FAILED;
 	}
+	b->filename_id = file_name_id;
+	b->line_number = line_number;
 	b->next = blocks;
 	blocks = b;
-	fscanf(f_in, "%64s ", b->name);
+	fscanf(f_in, STRING_READ_FORMAT, b->name);
 	b->address = add;
 	continue;
 
@@ -132,12 +138,13 @@ int pass_3(void) {
 	free(b);
 	continue;
 
-      case 'Z':
-      case 'Y':
-      case 'L':
+      case 'Z': /* Breakpoint */
+      case 'Y': /* Symbol */
+      case 'L': /* Label */
 	l = malloc(sizeof(struct label_def));
+
 	if (l == NULL) {
-	  fscanf(f_in, "%64s ", tmp);
+		fscanf(f_in, STRING_READ_FORMAT, tmp);
 	  fprintf(stderr, "%s:%d INTERNAL_PASS_1: Out of memory while trying to allocate room for label \"%s\".\n",
 		  get_file_name(file_name_id), line_number, tmp);
 	  return FAILED;
@@ -153,7 +160,31 @@ int pass_3(void) {
 	if (c == 'Z')
 	  l->label[0] = 0;
 	else
-	  fscanf(f_in, "%64s ", l->label);
+	  fscanf(f_in, STRING_READ_FORMAT, l->label);
+
+        if (c == 'L' && is_label_anonymous(l->label) == FAILED) {
+          /* If the label has '@' at the start, mangle the label name to make it
+           * unique */
+          int n = 0, m;
+
+          while (n < 10 && l->label[n] == '@') {
+            n++;
+          }
+          m = n;
+          while (m < 10)
+            parent_labels[m++] = NULL;
+
+          if (n < 10)
+            parent_labels[n] = l;
+          n--;
+          while (n >= 0 && parent_labels[n] == 0)
+            n--;
+
+          if (n >= 0) {
+            if (mangle_label(l->label, parent_labels[n]->label, n, MAX_NAME_LENGTH) == FAILED)
+              return FAILED;
+          }
+        }
 
 	l->next = NULL;
 	l->section_status = ON;
@@ -161,15 +192,14 @@ int pass_3(void) {
 	l->linenumber = line_number;
 	l->alive = ON;
 	l->section_id = s->id;
+        l->section_struct = s;
 	/* section labels get a relative address */
 	l->address = add;
 	l->bank = s->bank;
 	l->slot = s->slot;
-#ifdef W65816
 	l->base = base;
-#endif
 
-	if (c == 'Z' || is_label_anonymous(l->label) == SUCCEEDED || strcmp(l->label, "__") == 0) {
+	if (c == 'Z' || is_label_anonymous(l->label) == SUCCEEDED) {
 	  if (labels != NULL) {
 	    label_last->next = l;
 	    label_last = l;
@@ -181,18 +211,51 @@ int pass_3(void) {
 	  continue;
 	}
 
-	label_next = labels;
-	while (label_next != NULL) {
-	  if (strcmp(l->label, label_next->label) == 0) {
-	    if ((l->label[0] != '_') || /* both are not local labels */
-		(section_status == OFF && label_next->section_status == OFF) ||
-		(section_status == ON && label_next->section_status == ON && label_next->section_id == l->section_id)) {
-	      fprintf(stderr, "%s:%d: INTERNAL_PASS_1: Label \"%s\" was defined for the second time.\n", get_file_name(file_name_id), line_number, l->label);
-	      return FAILED;
-	    }
-	  }
-	  label_next = label_next->next;
-	}
+        /* Check the label is not already defined */
+
+        sprintf(emsg, "%s:%d: INTERNAL_PASS_1: Label \"%s\" was defined for the second time.\n",
+            get_file_name(file_name_id),
+            line_number,
+            l->label);
+
+        if (s != NULL) {
+          /* Always put the label into the section's label_map */
+          if (hashmap_get(s->label_map, l->label, NULL) == MAP_OK) {
+            fprintf(stderr, emsg);
+            return FAILED;
+          }
+          if ((err = hashmap_put(s->label_map, l->label, l)) != MAP_OK) {
+            fprintf(stderr, "Hashmap error %d. Please send a bug report!", err);
+            return FAILED;
+          }
+        }
+
+        /* Don't put local labels into namespaces or the global namespace */
+        if (s == NULL || l->label[0] != '_') {
+          if (s != NULL && s->nspace != NULL) {
+            /* Label in a namespace */
+            if (hashmap_get(s->nspace->label_map, l->label, NULL) == MAP_OK) {
+              fprintf(stderr, emsg);
+              return FAILED;
+            }
+            if ((err = hashmap_put(s->nspace->label_map, l->label, l)) != MAP_OK) {
+              fprintf(stderr, "Hashmap error %d. Please send a bug report!", err);
+              return FAILED;
+            }
+          }
+          else {
+            /* Global label */
+            if (hashmap_get(global_unique_label_map, l->label, NULL) == MAP_OK) {
+              fprintf(stderr, emsg);
+              return FAILED;
+            }
+            if ((err = hashmap_put(global_unique_label_map, l->label, l)) != MAP_OK) {
+              fprintf(stderr, "Hashmap error %d. Please send a bug report!", err);
+              return FAILED;
+            }
+          }
+        }
+
 
 	if (labels != NULL) {
 	  label_last->next = l;
@@ -239,10 +302,11 @@ int pass_3(void) {
 	  /* discard all labels which belong to this section */
 	  l = labels;
 	  while (l != NULL) {
-	    if (l->section_status == ON && l->section_id == s->id)
+	    if (l->section_status == ON && l->section_id == s->id) {
 	      l->alive = OFF;
+            }
 	    l = l->next;
-	  }
+          }
 	}
 
 	if (s->advance_org == NO)
@@ -351,16 +415,17 @@ int pass_3(void) {
 
       /* discard an empty section? */
       if (s->size == 0) {
-	fprintf(stderr, "DISCARD: %s: Discarding an empty section \"%s\".\n", get_file_name(file_name_id), s->name);
-	s->alive = OFF;
+        fprintf(stderr, "DISCARD: %s: Discarding an empty section \"%s\".\n", get_file_name(file_name_id), s->name);
+        s->alive = OFF;
 
-	/* discard all labels which belong to this section */
-	l = labels;
-	while (l != NULL) {
-	  if (l->section_status == ON && l->section_id == s->id)
-	    l->alive = OFF;
-	  l = l->next;
-	}
+        /* discard all labels which belong to this section */
+        l = labels;
+        while (l != NULL) {
+          if (l->section_status == ON && l->section_id == s->id) {
+            l->alive = OFF;
+          }
+          l = l->next;
+        }
       }
 
       /* some sections don't affect the ORG outside of them */
@@ -383,6 +448,7 @@ int pass_3(void) {
 
 #ifdef W65816
     case 'z':
+#endif
     case 'q':
       fscanf(f_in, "%*s ");
       add += 3;
@@ -396,7 +462,6 @@ int pass_3(void) {
     case 'b':
       fscanf(f_in, "%d ", &base);
       continue;
-#endif
 
     case 'R':
     case 'Q':
@@ -436,14 +501,16 @@ int pass_3(void) {
     case 'g':
       b = malloc(sizeof(struct block));
       if (b == NULL) {
-	fscanf(f_in, "%64s ", tmp);
+	fscanf(f_in, STRING_READ_FORMAT, tmp);
 	fprintf(stderr, "%s:%d INTERNAL_PASS_1: Out of memory while trying to allocate room for block \"%s\".\n",
 		get_file_name(file_name_id), line_number, tmp);
 	return FAILED;
       }
+      b->filename_id = file_name_id;
+      b->line_number = line_number;
       b->next = blocks;
       blocks = b;
-      fscanf(f_in, "%64s ", b->name);
+      fscanf(f_in, STRING_READ_FORMAT, b->name);
       b->address = add;
       continue;
 
@@ -454,12 +521,12 @@ int pass_3(void) {
       free(b);
       continue;
 
-    case 'Z':
-    case 'Y':
-    case 'L':
+    case 'Z': /* Breakpoint */
+    case 'Y': /* Symbol */
+    case 'L': /* Label */
       l = malloc(sizeof(struct label_def));
       if (l == NULL) {
-	fscanf(f_in, "%64s ", tmp);
+	fscanf(f_in, STRING_READ_FORMAT, tmp);
 	fprintf(stderr, "%s:%d INTERNAL_PASS_1: Out of memory while trying to allocate room for label \"%s\".\n",
 		get_file_name(file_name_id), line_number, tmp);
 	return FAILED;
@@ -475,7 +542,31 @@ int pass_3(void) {
       if (c == 'Z')
 	l->label[0] = 0;
       else
-	fscanf(f_in, "%64s ", l->label);
+	fscanf(f_in, STRING_READ_FORMAT, l->label);
+
+      if (c == 'L' && is_label_anonymous(l->label) == FAILED) {
+        /* If the label has '@' at the start, mangle the label name to make it
+         * unique */
+        int n = 0, m;
+
+        while (n < 10 && l->label[n] == '@') {
+          n++;
+        }
+        m = n;
+        while (m < 10)
+          parent_labels[m++] = NULL;
+
+        if (n < 10)
+          parent_labels[n] = l;
+        n--;
+        while (n >= 0 && parent_labels[n] == 0)
+          n--;
+
+        if (n >= 0) {
+          if (mangle_label(l->label, parent_labels[n]->label, n, MAX_NAME_LENGTH) == FAILED)
+            return FAILED;
+        }
+      }
 
       l->next = NULL;
       l->section_status = section_status;
@@ -483,24 +574,24 @@ int pass_3(void) {
       l->linenumber = line_number;
       l->alive = ON;
       if (section_status == ON) {
-	l->section_id = s->id;
-	/* section labels get a relative address */
-	l->address = add - s->address;
-	l->bank = s->bank;
-	l->slot = s->slot;
+        l->section_id = s->id;
+        l->section_struct = s;
+        /* section labels get a relative address */
+        l->address = add - s->address;
+        l->bank = s->bank;
+        l->slot = s->slot;
       }
       else {
 	l->section_id = 0;
+        l->section_struct = NULL;
 	l->address = add;
 	l->bank = bank;
 	l->slot = slot;
       }
 
-#ifdef W65816
       l->base = base;
-#endif
 
-      if (c == 'Z' || is_label_anonymous(l->label) == SUCCEEDED || strcmp(l->label, "__") == 0) {
+      if (c == 'Z' || is_label_anonymous(l->label) == SUCCEEDED) {
 	if (labels != NULL) {
 	  label_last->next = l;
 	  label_last = l;
@@ -512,26 +603,56 @@ int pass_3(void) {
 	continue;
       }
 
-      label_next = labels;
-      while (label_next != NULL) {
-	if (strcmp(l->label, label_next->label) == 0) {
-	  if ((l->label[0] != '_') || /* both are not local labels */
-	      (section_status == OFF && label_next->section_status == OFF) ||
-	      (section_status == ON && label_next->section_status == ON && label_next->section_id == l->section_id)) {
-	    fprintf(stderr, "%s:%d: INTERNAL_PASS_1: Label \"%s\" was defined for the second time.\n", get_file_name(file_name_id), line_number, l->label);
-	    return FAILED;
-	  }
-	}
-	label_next = label_next->next;
+      sprintf(emsg, "%s:%d: INTERNAL_PASS_1: Label \"%s\" was defined for the second time.\n",
+          get_file_name(file_name_id),
+          line_number,
+          l->label);
+
+      if (s != NULL) {
+        /* Always put the label into the section's label_map */
+        if (hashmap_get(s->label_map, l->label, NULL) == MAP_OK) {
+          fprintf(stderr, emsg);
+          return FAILED;
+        }
+        if ((err = hashmap_put(s->label_map, l->label, l)) != MAP_OK) {
+          fprintf(stderr, "Hashmap error %d. Please send a bug report!", err);
+          return FAILED;
+        }
+      }
+
+      /* Don't put local labels into namespaces or the global namespace */
+      if (s == NULL || l->label[0] != '_') {
+        if (s != NULL && s->nspace != NULL) {
+          /* Label in a namespace */
+          if (hashmap_get(s->nspace->label_map, l->label, NULL) == MAP_OK) {
+            fprintf(stderr, emsg);
+            return FAILED;
+          }
+          if ((err = hashmap_put(s->nspace->label_map, l->label, l)) != MAP_OK) {
+            fprintf(stderr, "Hashmap error %d. Please send a bug report!", err);
+            return FAILED;
+          }
+        }
+        else {
+          /* Global label */
+          if (hashmap_get(global_unique_label_map, l->label, NULL) == MAP_OK) {
+            fprintf(stderr, emsg);
+            return FAILED;
+          }
+          if ((err = hashmap_put(global_unique_label_map, l->label, l)) != MAP_OK) {
+            fprintf(stderr, "Hashmap error %d. Please send a bug report!", err);
+            return FAILED;
+          }
+        }
       }
 
       if (labels != NULL) {
-	label_last->next = l;
-	label_last = l;
+        label_last->next = l;
+        label_last = l;
       }
       else {
-	labels = l;
-	label_last = l;
+        labels = l;
+        label_last = l;
       }
 
       continue;
@@ -549,23 +670,30 @@ int pass_3(void) {
       continue;
 
     default:
-      fprintf(stderr, "%s: INTERNAL_PASS_1: Unknown internal symbol \"%c\".\n", get_file_name(file_name_id), c);
+      fprintf(stderr, "%s: INTERNAL_PASS_1: Unknown internal symbol \"%c\" in \"%s\" at offset %ld.\n", get_file_name(file_name_id), c, gba_tmp_name, ftell(f_in)-1);
       return FAILED;
     }
   }
 
   fclose(f_in);
+  
+  if (blocks != NULL) {
+    fprintf(stderr, "%s:%d INTERNAL_PASS_1: .BLOCK \"%s\" was left open.\n", get_file_name(blocks->filename_id), blocks->line_number, blocks->name);
+    return FAILED;
+  }
 
   return SUCCEEDED;
 }
 
 
-/* is the label of form -, --, ---, +, ++, +++, ... ? */
+/* is the label of form __, -, --, ---, +, ++, +++, ... ? */
 int is_label_anonymous(char *label) {
 
   int length, i;
   char c;
 
+  if (strcmp(label, "__") == 0)
+    return SUCCEEDED;
 
   c = *label;
   if (!(c == '-' || c == '+'))
@@ -575,6 +703,24 @@ int is_label_anonymous(char *label) {
     if (*(label + i) != c)
       return FAILED;
   }
+
+  return SUCCEEDED;
+}
+
+int mangle_label(char *label, char *parent, int n, unsigned int label_size) {
+  char buf[MAX_NAME_LENGTH*2+2];
+  int len = strlen(parent);
+
+  strcpy(buf, parent);
+  strcpy(&buf[len], label+n);
+
+  if (len+strlen(label+n)+1 > label_size) {
+    fprintf(stderr, "MANGLE_LABEL: Child label expands to \"%s\" which is %d bytes too large.\n", buf, (int)(strlen(buf)-label_size+1));
+    return FAILED;
+  }
+
+  buf[label_size-1] = 0;
+  strcpy(label, buf);
 
   return SUCCEEDED;
 }

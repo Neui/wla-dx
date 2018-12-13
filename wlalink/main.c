@@ -20,13 +20,13 @@
 #include "discard.h"
 #include "listfile.h"
 
-/* define this if you want to display debug information */
+/* define this if you want to display debug information when you run WLALINK */
 /*
-#define _MAIN_DEBUG
+#define WLALINK_DEBUG
 */
 
 #ifdef AMIGA
-char version_string[] = "$VER: WLALINK 5.7 (02.03.2008)";
+char version_string[] = "$VER: WLALINK 5.9 (17.04.2018)";
 #endif
 
 struct object_file *obj_first = NULL, *obj_last = NULL, *obj_tmp;
@@ -34,17 +34,111 @@ struct reference *reference_first = NULL, *reference_last = NULL;
 struct section *sec_first = NULL, *sec_last = NULL, *sec_hd_first = NULL, *sec_hd_last = NULL;
 struct stack *stacks_first = NULL, *stacks_last = NULL;
 struct label *labels_first = NULL, *labels_last = NULL;
+struct label **sorted_anonymous_labels = NULL;
+struct map_t *global_unique_label_map = NULL;
+struct map_t *namespace_map = NULL;
 struct slot slots[256];
+struct append_section *append_sections = NULL, *append_tmp;
 unsigned char *rom, *rom_usage, *file_header = NULL, *file_footer = NULL;
 int romsize, rombanks, banksize, verbose_mode = OFF, section_overwrite = OFF, symbol_mode = SYMBOL_MODE_NONE;
 int pc_bank, pc_full, pc_slot, pc_slot_max;
 int file_header_size, file_footer_size, *banksizes = NULL, *bankaddress = NULL;
-int output_mode = OUTPUT_ROM, discard_unreferenced_sections = OFF;
-int program_start, program_end, sms_checksum, smstag_defined = 0, snes_rom_mode = SNES_ROM_MODE_LOROM, snes_rom_speed = SNES_ROM_SPEED_SLOWROM;
+int output_mode = OUTPUT_ROM, discard_unreferenced_sections = OFF, use_libdir = NO;
+int program_start, program_end, sms_checksum, smstag_defined = 0, snes_rom_mode = SNES_ROM_MODE_LOROM, snes_rom_speed = SNES_ROM_SPEED_SLOWROM, sms_header = 0;
 int gb_checksum, gb_complement_check, snes_checksum, cpu_65816 = 0, snes_mode = 0;
 int listfile_data = NO, smc_status = 0, snes_sramsize = 0;
+int num_sorted_anonymous_labels = 0;
 
 extern int emptyfill;
+char ext_libdir[MAX_NAME_LENGTH];
+
+
+
+#ifdef WLALINK_DEBUG
+static const char *si_operator_plus = "+";
+static const char *si_operator_minus = "-";
+static const char *si_operator_multiply = "*";
+static const char *si_operator_or = "|";
+static const char *si_operator_and = "&";
+static const char *si_operator_divide = "/";
+static const char *si_operator_power = "^";
+static const char *si_operator_shift_left = "<<";
+static const char *si_operator_shift_right = ">>";
+static const char *si_operator_modulo = "#";
+static const char *si_operator_xor = "~";
+static const char *si_operator_low_byte = "<";
+static const char *si_operator_high_byte = ">";
+static const char *si_operator_unknown = "UNKNOWN!";
+
+static const char *get_stack_item_operator_name(int operator) {
+
+  if (operator == SI_OP_PLUS)
+    return si_operator_plus;
+  else if (operator == SI_OP_MINUS)
+    return si_operator_minus;
+  else if (operator == SI_OP_MULTIPLY)
+    return si_operator_multiply;
+  else if (operator == SI_OP_OR)
+    return si_operator_or;
+  else if (operator == SI_OP_AND)
+    return si_operator_and;
+  else if (operator == SI_OP_DIVIDE)
+    return si_operator_divide;
+  else if (operator == SI_OP_POWER)
+    return si_operator_power;
+  else if (operator == SI_OP_SHIFT_LEFT)
+    return si_operator_shift_left;
+  else if (operator == SI_OP_SHIFT_RIGHT)
+    return si_operator_shift_right;
+  else if (operator == SI_OP_MODULO)
+    return si_operator_modulo;
+  else if (operator == SI_OP_XOR)
+    return si_operator_xor;
+  else if (operator == SI_OP_LOW_BYTE)
+    return si_operator_low_byte;
+  else if (operator == SI_OP_HIGH_BYTE)
+    return si_operator_high_byte;
+
+  return si_operator_unknown;
+}
+
+static char stack_item_description[512];
+
+char *get_stack_item_description(struct stackitem *si) {
+
+  char *sid = stack_item_description;
+
+  if (si == NULL)
+    sprintf(sid, "NULL");
+  else {
+    int type = si->type;
+    
+    if (type == STACK_ITEM_TYPE_VALUE)
+      sprintf(sid, "stackitem: value              : %f/$%x\n", si->value, (int)si->value);
+    else if (type == STACK_ITEM_TYPE_OPERATOR)
+      sprintf(sid, "stackitem: operator           : %s\n", get_stack_item_operator_name((int)si->value));
+    else if (type == STACK_ITEM_TYPE_STRING)
+      sprintf(sid, "stackitem: label              : %s\n", si->string);
+    else if (type == STACK_ITEM_TYPE_STACK) {
+      struct stack *st = find_stack(si->value, si->sign);
+
+      if (st->computed == YES)
+	sprintf(sid, "stackitem: (stack) calculation: %d (result = %d/$%x)\n", (int)si->value, st->result, st->result);
+      else
+	sprintf(sid, "stackitem: (stack) calculation: %d (result = ?)\n", (int)si->value);
+    }
+    else
+      sprintf(sid, "stackitem: UNKNOWN!");
+  }
+  
+  return sid;
+}
+
+static void debug_print_label(struct label *l) {
+
+  printf("label: \"%s\" file: %s status: %d section: %d bank: %d slot: %d base: %d address: %d/$%x\n", l->name, get_file_name(l->file_id), l->status, l->section, l->bank, l->slot, l->base, (int)l->address, (int)l->address);
+}
+#endif
 
 
 
@@ -62,32 +156,33 @@ int main(int argc, char *argv[]) {
   atexit(procedures_at_exit);
 
   i = SUCCEEDED;
-  x = SUCCEEDED;
 
-  if (argc > 1)
-    x = parse_flags(argv[1]);
+  if (argc > 2)
+    x = parse_flags(argv, argc);
   else
-    i = FAILED;
+    x = FAILED;
 
-  if (x == FAILED && argc != 3)
-    i = FAILED;
-  if (x == SUCCEEDED && argc != 4)
-    i = FAILED;
-
-  if (i == FAILED) {
-    printf("\nWLALINK GB-Z80/Z80/6502/65C02/6510/65816/HUC6280/SPC-700 WLA Macro Assembler Linker v5.7\n");
-    printf("Written by Ville Helin in 2000-2008\n");
-    printf("USAGE: %s [-bdirsSv] <LINK FILE> <OUTPUT FILE>\n", argv[0]);
+  if (x == FAILED) {
+    printf("\nWLALINK GB-Z80/Z80/6502/65C02/6510/65816/HUC6280/SPC-700 WLA Macro Assembler Linker v5.8b\n");
+    printf("Written by Ville Helin in 2000-2008 - In GitHub since 2014: https://github.com/vhelin/wla-dx\n");
+#ifdef WLALINK_DEBUG
+    printf("*** WLALINK_DEBUG defined - this executable is running in DEBUG mode ***\n");
+#endif
+    printf("USAGE: %s [OPTIONS] <LINK FILE> <OUTPUT FILE>\n\n", argv[0]);
     printf("Options:\n");
-    printf("b  Program file output\n");
-    printf("d  Discard unreferenced sections\n");
-    printf("i  Write list files\n");
-    printf("r  ROM file output (default)\n");
-    printf("s  Write also a NO$GMB symbol file\n");
-    printf("S  Write also a WLA symbol file\n");
-    printf("v  Verbose messages\n\n");
+    printf("-b  Program file output\n");
+    printf("-d  Discard unreferenced sections\n");
+    printf("-i  Write list files\n");
+    printf("-r  ROM file output (default)\n");
+    printf("-s  Write also a NO$GMB symbol file\n");
+    printf("-S  Write also a WLA symbol file\n");
+    printf("-v  Verbose messages\n");
+    printf("-L [DIR]  Library directory\n\n");
     return 0;
   }
+
+  global_unique_label_map = hashmap_new();
+  namespace_map = hashmap_new();
 
   /* load files */
   if (load_files(argv, argc) == FAILED)
@@ -132,7 +227,7 @@ int main(int argc, char *argv[]) {
   if (obtain_source_file_names() == FAILED)
     return 1;
 
-  /* collect all defines, labels and outside references */
+  /* collect all defines, labels, outside references and pending (stack) calculations */
   if (collect_dlr() == FAILED)
     return 1;
 
@@ -144,8 +239,16 @@ int main(int argc, char *argv[]) {
   if (parse_data_blocks() == FAILED)
     return 1;
 
+  /* append sections */
+  if (merge_sections() == FAILED)
+    return 1;
+
   /* clean up the structures */
   if (clean_up_dlr() == FAILED)
+    return 1;
+
+  /* associate labels with their sections */
+  if (fix_label_sections() == FAILED)
     return 1;
 
   /* drop all unreferenced sections */
@@ -156,11 +259,9 @@ int main(int argc, char *argv[]) {
     discard_drop_labels();
   }
 
-  /* correct 65816 library section addresses */
-  if (cpu_65816 != 0) {
-    if (correct_65816_library_sections() == FAILED)
-      return 1;
-  }
+  /* correct non-zero-BASE library section addresses */
+  if (correct_65816_library_sections() == FAILED)
+    return 1;
 
   /* if ROM size < 32KBs, correct SDSC tag sections' addresses */
   if (smstag_defined != 0 && romsize < 0x8000) {
@@ -180,51 +281,77 @@ int main(int argc, char *argv[]) {
       s = s->next;
     }
   }
+
+#ifdef WLALINK_DEBUG
+  printf("\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+  printf("*** LOADED LOADED LOADED LOADED LOADED LOADED LOADED LOADED LOADED ***\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
   
-#ifdef _MAIN_DEBUG
-  {
-    printf("\n*********************************************\n");
-    printf("JUST LOADED IN\n");
-    printf("*********************************************\n\n");
-  }
+  if (labels_first != NULL) {
+    struct label *l = labels_first;
 
-  {
-    struct label *l;
+    printf("\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("---                         LABELS                                 ---\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("\n");
 
-    printf("LABELS:\n");
-    l = labels_first;
     while (l != NULL) {
-      printf("--------------------------------------\n");
-      printf("name: \"%s\"\n", l->name);
-      printf("sect: \"%d\"\n", l->section);
-      printf("slot: \"%d\"\n", l->slot);
-      printf("base: \"%d\"\n", l->base);
-      printf("bank: \"%d\"\n", l->bank);
-      printf("address: \"%d\"\n", (int)l->address);
-      printf("status: \"%d\"\n", l->status);
-      printf("file_id: \"%d\"\n", l->file_id);
+      debug_print_label(l);
       l = l->next;
     }
-    printf("--------------------------------------\n");
   }
 
-  {
-    struct stack *s;
+  if (stacks_first != NULL) {
+    struct stack *s = stacks_first;
 
-    printf("STACKS:\n");
-    s = stacks_first;
+    printf("\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("---                    (STACK) CALCULATIONS                        ---\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("\n");
+
     while (s != NULL) {
-      printf("--------------------------------------\n");
-      printf("result: \"%d\"\n", s->result);
-      printf("id: \"%d\"\n", s->id);
-      printf("file_id: \"%d\"\n", s->file_id);
-      printf("bank: \"%d\"\n", s->bank);
-      printf("linenumber: \"%d\"\n", s->linenumber);
-      printf("type: \"%d\"\n", s->type);
-      printf("position: \"%d\"\n", s->position);
+      printf("----------------------------------------------------------------------\n");
+      {
+	int z;
+	
+	for (z = 0; z < s->stacksize; z++) {
+	  struct stackitem *si = &s->stack[z];
+	  printf(get_stack_item_description(si));
+	}
+      }
+      printf("id: %d file: %s line: %d type: %d bank: %d position: %d\n", s->id, get_file_name(s->file_id), s->linenumber, s->type, s->bank, s->position);
       s = s->next;
     }
-    printf("--------------------------------------\n");
+    printf("----------------------------------------------------------------------\n");
+  }
+#endif
+
+  /* reserve the bytes the checksummers will use, so no (free type) sections will be placed there */
+  reserve_checksum_bytes();
+  
+#ifdef WLALINK_DEBUG
+  printf("\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+  printf("*** RESOLVED RESOLVED RESOLVED RESOLVED RESOLVED RESOLVED RESOLVED ***\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+  printf("**********************************************************************\n");
+    
+  if (sec_first != NULL) {
+    printf("\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("---                         SECTIONS                               ---\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("\n");
   }
 #endif
 
@@ -232,66 +359,92 @@ int main(int argc, char *argv[]) {
   if (insert_sections() == FAILED)
     return 1;
 
-#ifdef _MAIN_DEBUG
-  {
-    struct section *s;
-
-    printf("SECTIONS:\n");
-    s = sec_first;
+#ifdef WLALINK_DEBUG
+  if (sec_first != NULL) {
+    struct section *s = sec_first;
     while (s != NULL) {
-      printf("--------------------------------------\n");
-      printf("file: \"%s\"\n", get_file_name(s->file_id));
-      printf("name: \"%s\"\n", s->name);
-      printf("id:   %d\n", s->id);
-      printf("addr: %d\n", s->address);
-      printf("stat: %d\n", s->status);
-      printf("bank: %d\n", s->bank);
-      printf("slot: %d\n", s->slot);
-      printf("size: %d\n", s->size);
+      printf("----------------------------------------------------------------------\n");
+      printf("name: \"%s\" file: %s\n", s->name, get_file_name(s->file_id));
+      printf("id   : %d\n", s->id);
+      printf("addr : %d\n", s->address);
+      printf("stat : %d\n", s->status);
+      printf("bank : %d\n", s->bank);
+      printf("slot : %d\n", s->slot);
+      printf("size : %d\n", s->size);
+      printf("align: %d\n", s->alignment);
       s = s->next;
     }
-    printf("--------------------------------------\n");
+    printf("----------------------------------------------------------------------\n");
+  }
+
+  if (labels_first != NULL) {
+    printf("\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("---                         LABELS                                 ---\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("\n");
   }
 #endif
 
   /* compute the labels' addresses */
-  if (fix_labels() == FAILED)
+  if (fix_label_addresses() == FAILED)
     return 1;
 
+  /* generate _sizeof_[label] definitions */
+  if (generate_sizeof_label_definitions() == FAILED)
+    return 1;
+
+  /* sort anonymous labels to speed up searching for them */
+  if (sort_anonymous_labels() == FAILED)
+    return 1;
+
+#ifdef WLALINK_DEBUG
+  if (labels_first != NULL) {
+    struct label *l = labels_first;
+    while (l != NULL) {
+      debug_print_label(l);
+      l = l->next;
+    }
+  }
+
+  if (stacks_first != NULL) {
+    printf("\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("---                    (STACK) CALCULATIONS                        ---\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("\n");
+  }
+#endif
+  
   /* compute pending calculations */
   if (compute_pending_calculations() == FAILED)
     return 1;
 
-#ifdef _MAIN_DEBUG
-  {
-    struct stack *s;
-
-    printf("RESOLVED STACKS:\n");
-    s = stacks_first;
+#ifdef WLALINK_DEBUG
+  if (stacks_first != NULL) {
+    struct stack *s = stacks_first;
     while (s != NULL) {
-      printf("--------------------------------------\n");
-      printf("result: \"%d\"\n", s->result);
-      printf("id: \"%d\"\n", s->id);
-      printf("file_id: \"%d\"\n", s->file_id);
+      printf("----------------------------------------------------------------------\n");
+      {
+	int z;
+	
+	for (z = 0; z < s->stacksize; z++) {
+	  struct stackitem *si = &s->stack[z];
+	  printf(get_stack_item_description(si));
+	}
+      }
+      printf("id: %d file: %s line: %d type: %d bank: %d position: %d result: %d/$%x\n", s->id, get_file_name(s->file_id), s->linenumber, s->type, s->bank, s->position, s->result, s->result);
       s = s->next;
     }
-    printf("--------------------------------------\n");
+    printf("----------------------------------------------------------------------\n");
   }
-#endif
 
-#ifdef _MAIN_DEBUG
-  {
-    struct reference *r;
-
-    printf("REFERENCES:\n");
-    r = reference_first;
-    while (r != NULL) {
-      printf("--------------------------------------\n");
-      printf("name: \"%s\"\n", r->name);
-      printf("file_id: \"%d\"\n", r->file_id);
-      r = r->next;
-    }
-    printf("--------------------------------------\n");
+  if (reference_first != NULL) {
+    printf("\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("---                          REFERENCES                            ---\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("\n");
   }
 #endif
 
@@ -303,6 +456,16 @@ int main(int argc, char *argv[]) {
   if (fix_references() == FAILED)
     return 1;
 
+#ifdef WLALINK_DEBUG
+  if (reference_first != NULL) {
+    struct reference *r = reference_first;
+    while (r != NULL) {
+      printf("name: \"%s\" file: %s\n", r->name, get_file_name(r->file_id));
+      r = r->next;
+    }
+  }
+#endif
+
   /* write checksums and other last minute data */
   if (compute_checksums() == FAILED)
     return 1;
@@ -310,35 +473,6 @@ int main(int argc, char *argv[]) {
   /* write rom file */
   if (write_rom_file(argv[argc - 1]) == FAILED)
     return 1;
-
-#ifdef _MAIN_DEBUG
-  {
-    printf("\n*********************************************\n");
-    printf("AFTER EVERYTHING\n");
-    printf("*********************************************\n\n");
-  }
-
-  {
-    struct label *l;
-
-    printf("LABELS:\n");
-    l = labels_first;
-    while (l != NULL) {
-      printf("--------------------------------------\n");
-      printf("name: \"%s\"\n", l->name);
-      printf("sect: \"%d\"\n", l->section);
-      printf("slot: \"%d\"\n", l->slot);
-      printf("base: \"%d\"\n", l->base);
-      printf("address: \"%d\"\n", (int)l->address);
-      printf("rom_address: \"%d\"\n", l->rom_address);
-      printf("bank: \"%d\"\n", l->bank);
-      printf("status: \"%d\"\n", l->status);
-      printf("file_id: \"%d\"\n", l->file_id);
-      l = l->next;
-    }
-    printf("--------------------------------------\n");
-  }
-#endif
 
   /* export symbolic information file */
   if (symbol_mode != SYMBOL_MODE_NONE) {
@@ -439,6 +573,30 @@ int main(int argc, char *argv[]) {
 }
 
 
+int localize_path(char *path) {
+
+  int i;
+
+  
+  if (path == NULL)
+    return FAILED;
+
+  for (i = 0; path[i] != 0; i++) {
+#if defined(MSDOS)
+    /* '/' -> '\' */
+    if (path[i] == '/')
+      path[i] = '\\';
+#else
+    /* '\' -> '/' */
+    if (path[i] == '\\')
+      path[i] = '/';
+#endif
+  }
+
+  return SUCCEEDED;
+}
+
+
 void procedures_at_exit(void) {
 
   struct source_file_name *f, *fn;
@@ -467,6 +625,14 @@ void procedures_at_exit(void) {
     free(o);
   }
 
+  if (global_unique_label_map != NULL)
+    hashmap_free(global_unique_label_map);
+
+  if (namespace_map != NULL) {
+    hashmap_free_all_elements(namespace_map);
+    hashmap_free(namespace_map);
+  }
+
   while (labels_first != NULL) {
     l = labels_first;
     labels_first = labels_first->next;
@@ -492,6 +658,9 @@ void procedures_at_exit(void) {
       free(sec_first->listfile_cmds);
     if (sec_first->listfile_ints != NULL)
       free(sec_first->listfile_ints);
+    if (sec_first->data != NULL)
+      free(sec_first->data);
+    hashmap_free(sec_first->label_map);
     free(sec_first);
     sec_first = s;
   }
@@ -502,57 +671,115 @@ void procedures_at_exit(void) {
     sec_hd_first = s;
   }
 
+  append_tmp = append_sections;
+  while (append_tmp != NULL) {
+    append_sections = append_tmp->next;
+    free(append_tmp);
+    append_tmp = append_sections;
+  }
+
   if (banksizes != NULL)
     free(banksizes);
   if (bankaddress != NULL)
     free(bankaddress);
+
+  if (sorted_anonymous_labels != NULL)
+    free(sorted_anonymous_labels);
 }
 
 
-int parse_flags(char *f) {
+int parse_flags(char **flags, int flagc) {
 
-  int l, output_mode_defined = 0;
-
-  if (*f != '-')
-    return FAILED;
-
-  l = strlen(f);
-  if (l == 1)
-    return FAILED;
-
-  for (f++, l--; l > 0; l--, f++) {
-    switch (*f) {
-    case 'v':
-      verbose_mode = ON;
-      continue;
-    case 'i':
-      listfile_data = YES;
-      continue;
-    case 's':
-      symbol_mode = SYMBOL_MODE_NOCA5H;
-      continue;
-    case 'S':
-      symbol_mode = SYMBOL_MODE_WLA;
-      continue;
-    case 'b':
+  int output_mode_defined = 0;
+  int count;
+  
+  for (count = 1; count < flagc - 2; count++) {
+    if (!strcmp(flags[count], "-b")) {
       if (output_mode_defined == 1)
 	return FAILED;
       output_mode_defined++;
       output_mode = OUTPUT_PRG;
       continue;
-    case 'r':
+    }
+    else if (!strcmp(flags[count], "-r")) {
       if (output_mode_defined == 1)
 	return FAILED;
       output_mode_defined++;
       output_mode = OUTPUT_ROM;
       continue;
-    case 'd':
+    }
+    else if (!strcmp(flags[count], "-L")) {
+      if (count + 1 < flagc) {
+        /* get arg */
+        parse_and_set_libdir(flags[count+1], NO);
+      }
+      else
+        return FAILED;
+      count++;
+      continue;
+    }
+    else if (!strcmp(flags[count], "-i")) {
+      listfile_data = YES;
+      continue;
+    }
+    else if (!strcmp(flags[count], "-v")) {
+      verbose_mode = ON;
+      continue;
+    }
+    else if (!strcmp(flags[count], "-s")) {
+      symbol_mode = SYMBOL_MODE_NOCA5H;
+      continue;
+    }
+    else if (!strcmp(flags[count], "-S")) {
+      symbol_mode = SYMBOL_MODE_WLA;
+      continue;
+    }
+    else if (!strcmp(flags[count], "-d")) {
       discard_unreferenced_sections = ON;
       continue;
-    default:
-      return FAILED;
+    }
+    else {
+      /* legacy support? */
+      if (strncmp(flags[count], "-L", 2) == 0) {
+        /* old library directory */
+        parse_and_set_libdir(flags[count], YES);
+        continue;
+      }
+      else
+        return FAILED;
     }
   }
+  
+  return SUCCEEDED;
+}
+
+
+int parse_and_set_libdir(char *c, int contains_flag) {
+
+  char n[MAX_NAME_LENGTH];
+  int i;
+
+  /* skip the flag? */
+  if (contains_flag == YES)
+    c += 2;
+
+  if (strlen(c) < 2)
+    return FAILED;
+  
+  for (i = 0; i < (MAX_NAME_LENGTH - 1) && *c != 0; i++, c++)
+    n[i] = *c;
+  n[i] = 0;
+
+  if (*c != 0)
+    return FAILED;
+
+  localize_path(n);
+#if defined(MSDOS)
+  sprintf(ext_libdir, "%s\\", n);
+#else
+  sprintf(ext_libdir, "%s/", n);
+#endif
+  use_libdir = YES;
 
   return SUCCEEDED;
 }

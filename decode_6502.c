@@ -2,7 +2,7 @@
 case 0:
 for ( ; x < OP_SIZE_MAX; inz++, x++) {
   if (opt_tmp->op[x] == 0 && buffer[inz] == 0x0A) {
-    fprintf(file_out_ptr, "d%d ", opt_tmp->hex);
+    output_assembled_opcode(opt_tmp, "d%d ", opt_tmp->hex);
     i = inz;
     return SUCCEEDED;
   }
@@ -24,18 +24,18 @@ for ( ; x < OP_SIZE_MAX; inz++, x++) {
     if (!(z == SUCCEEDED || z == INPUT_NUMBER_ADDRESS_LABEL || z == INPUT_NUMBER_STACK))
       return FAILED;
     if (z == SUCCEEDED && (d > 127 || d < -128)) {
-      print_error("Out of 8bit range.\n", ERROR_NUM);
+      print_error("Out of 8-bit range.\n", ERROR_NUM);
       return FAILED;
     }
 
     for (x++ ; x < OP_SIZE_MAX; inz++, x++) {
       if (opt_tmp->op[x] == 0 && buffer[inz] == 0x0A) {
 	if (z == SUCCEEDED)
-	  fprintf(file_out_ptr, "d%d d%d ", opt_tmp->hex, d);
+	  output_assembled_opcode(opt_tmp, "d%d d%d ", opt_tmp->hex, d);
 	else if (z == INPUT_NUMBER_ADDRESS_LABEL)
-	  fprintf(file_out_ptr, "k%d d%d R%s ", active_file_info_last->line_current, opt_tmp->hex, label);
+	  output_assembled_opcode(opt_tmp, "k%d d%d R%s ", active_file_info_last->line_current, opt_tmp->hex, label);
 	else {
-	  fprintf(file_out_ptr, "d%d c%d ", opt_tmp->hex, latest_stack);
+	  output_assembled_opcode(opt_tmp, "d%d c%d ", opt_tmp->hex, latest_stack);
 	  if (opt_tmp->type == 5) {
 	    /* 5 -> let's configure the stack so that all label references inside are relative */
 	    stacks_tmp->relative_references = 1;
@@ -65,18 +65,18 @@ for ( ; x < OP_SIZE_MAX; inz++, x++) {
     if (!(z == SUCCEEDED || z == INPUT_NUMBER_ADDRESS_LABEL || z == INPUT_NUMBER_STACK))
       return FAILED;
     if (z == SUCCEEDED && (d > 65535 || d < -32768)) {
-      print_error("Out of 16bit range.\n", ERROR_NUM);
+      print_error("Out of 16-bit range.\n", ERROR_NUM);
       return FAILED;
     }
 
     for (x++ ; x < OP_SIZE_MAX; inz++, x++) {
       if (opt_tmp->op[x] == 0 && buffer[inz] == 0x0A) {
 	if (z == SUCCEEDED)
-	  fprintf(file_out_ptr, "d%d y%d ", opt_tmp->hex, d);
+	  output_assembled_opcode(opt_tmp, "d%d y%d ", opt_tmp->hex, d);
 	else if (z == INPUT_NUMBER_ADDRESS_LABEL)
-	  fprintf(file_out_ptr, "k%d d%d r%s ", active_file_info_last->line_current, opt_tmp->hex, label);
+	  output_assembled_opcode(opt_tmp, "k%d d%d r%s ", active_file_info_last->line_current, opt_tmp->hex, label);
 	else
-	  fprintf(file_out_ptr, "d%d C%d ", opt_tmp->hex, latest_stack);
+	  output_assembled_opcode(opt_tmp, "d%d C%d ", opt_tmp->hex, latest_stack);
 
 	i = inz;
 	return SUCCEEDED;
@@ -93,7 +93,7 @@ break;
 case 3:
 for ( ; x < OP_SIZE_MAX; inz++, x++) {
   if (opt_tmp->op[x] == 0 && buffer[inz] == 0x0A) {
-    fprintf(file_out_ptr, "y%d ", opt_tmp->hex);
+    output_assembled_opcode(opt_tmp, "y%d ", opt_tmp->hex);
     i = inz;
     return SUCCEEDED;
   }
@@ -120,18 +120,18 @@ for ( ; x < OP_SIZE_MAX; inz++, x++) {
     if (z == SUCCEEDED && (d > 255 || d < -128)) {
       if (opt_tmp->skip_8bit == 1)
 	break;
-      print_error("Out of 8bit range.\n", ERROR_NUM);
+      print_error("Out of 8-bit range.\n", ERROR_NUM);
       return FAILED;
     }
 
     for (x++ ; x < OP_SIZE_MAX; inz++, x++) {
       if (opt_tmp->op[x] == 0 && buffer[inz] == 0x0A) {
 	if (z == SUCCEEDED)
-	  fprintf(file_out_ptr, "d%d d%d ", opt_tmp->hex, d);
+	  output_assembled_opcode(opt_tmp, "d%d d%d ", opt_tmp->hex, d);
 	else if (z == INPUT_NUMBER_ADDRESS_LABEL)
-	  fprintf(file_out_ptr, "k%d d%d Q%s ", active_file_info_last->line_current, opt_tmp->hex, label);
+	  output_assembled_opcode(opt_tmp, "k%d d%d Q%s ", active_file_info_last->line_current, opt_tmp->hex, label);
 	else
-	  fprintf(file_out_ptr, "d%d c%d ", opt_tmp->hex, latest_stack);
+	  output_assembled_opcode(opt_tmp, "d%d c%d ", opt_tmp->hex, latest_stack);
 	
 	i = inz;
 	return SUCCEEDED;

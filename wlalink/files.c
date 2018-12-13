@@ -14,17 +14,18 @@
 extern struct object_file *obj_first, *obj_last, *obj_tmp;
 extern struct label *labels_first, *labels_last;
 extern unsigned char *file_header, *file_footer;
-extern int file_header_size, file_footer_size;
+extern int file_header_size, file_footer_size, use_libdir;
 char file_name_error[] = "???";
+extern char ext_libdir[MAX_NAME_LENGTH];
 
 
 
 int load_files(char *argv[], int argc) {
 
   int state = STATE_NONE, i, x, line, bank, slot, base, bank_defined, slot_defined, base_defined, n;
-  char tmp[1024], token[1024];
+  char tmp[1024], token[1024], tmp_token[MAX_NAME_LENGTH];
   struct label *l;
-  FILE *fop;
+  FILE *fop, *f;
 
   
   fop = fopen(argv[argc - 2], "rb");
@@ -42,7 +43,7 @@ int load_files(char *argv[], int argc) {
       continue;
 
     /* remove garbage from the end */
-    for (i = 0; !(tmp[i] == 0x0D || tmp[i] == 0x0A); i++)
+    for (i = 0; !(tmp[i] == 0x0D || tmp[i] == 0x0A || tmp[i] == 0x00); i++)
       ;
     tmp[i] = 0;
 
@@ -94,7 +95,7 @@ int load_files(char *argv[], int argc) {
 
     /* definition loading? */
     if (state == STATE_DEFINITION) {
-      l = malloc(sizeof(struct label));
+      l = calloc(1, sizeof(struct label));
       if (l == NULL) {
 	fprintf(stderr, "LOAD_FILES: Out of memory.\n");
 	return FAILED;
@@ -221,7 +222,21 @@ int load_files(char *argv[], int argc) {
 	return FAILED;
       }
       
-      if (load_file(token, bank, slot, base, base_defined) == FAILED) {
+      if (use_libdir == YES) {
+        f = fopen(token, "rb");
+      
+        /* use the current working directory if the library isn't found in the ext_libdir directory */
+        if (f == NULL)
+          sprintf(tmp_token, "%s%s", ext_libdir, token);
+        else {
+          sprintf(tmp_token, "%s", token);
+	  fclose(f);
+	}
+      }
+      else
+        sprintf(tmp_token, "%s", token);
+      
+      if (load_file(tmp_token, bank, slot, base, base_defined) == FAILED) {
 	fclose(fop);
 	return FAILED;
       }

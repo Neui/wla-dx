@@ -1,4 +1,3 @@
-
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,14 +7,18 @@
 #include "memory.h"
 #include "write.h"
 #include "files.h"
+#include "analyze.h"
 
 
 
 extern struct reference *reference_first, *reference_last;
 extern struct label *labels_first, *labels_last;
+extern struct label **sorted_anonymous_labels;
 extern struct object_file *obj_first, *obj_last, *obj_tmp;
 extern struct section *sec_first, *sec_last, *sec_hd_first, sec_hd_last;
 extern struct stack *stacks_first, *stacks_last;
+extern struct map_t *global_unique_label_map;
+extern struct map_t *namespace_map;
 extern struct slot slots[256];
 extern unsigned char *rom, *rom_usage;
 extern unsigned char *file_header, *file_footer;
@@ -25,6 +28,7 @@ extern int file_header_size, file_footer_size, *bankaddress, *banksizes;
 extern int memory_file_id, memory_file_id_source, memory_line_number, output_mode;
 extern int program_start, program_end, cpu_65816, snes_mode, smc_status;
 extern int snes_sramsize;
+extern int num_sorted_anonymous_labels;
 
 
 static int _sections_sort(const void *a, const void *b) {
@@ -88,7 +92,7 @@ int insert_sections(void) {
 
   struct section *s, **sa;
   int d, f, i, x, t, q, sn, p;
-  char *ram_slots[256], *c;
+  char **ram_slots[256], *c;
 
   
   /* initialize ram slots */
@@ -98,13 +102,24 @@ int insert_sections(void) {
   /* find all touched slots */
   s = sec_first;
   while (s != NULL) {
-    if (s->status == SECTION_STATUS_RAM && ram_slots[s->slot] == NULL) {
-      ram_slots[s->slot] = malloc(slots[s->slot].size);
-      if (ram_slots[s->slot] == NULL) {
-	fprintf(stderr, "INSERT_SECTIONS: Out of memory error.\n");
-	return FAILED;
+    if (s->status == SECTION_STATUS_RAM) {
+      if (ram_slots[s->bank] == NULL) {
+	ram_slots[s->bank] = malloc(sizeof(char *) * 256);
+	if (ram_slots[s->bank] == NULL) {
+	  fprintf(stderr, "INSERT_SECTIONS: Out of memory error.\n");
+	  return FAILED;
+	}
+	for (i = 0; i < 256; i++)
+	  ram_slots[s->bank][i] = NULL;
       }
-      memset(ram_slots[s->slot], 0, slots[s->slot].size);
+      if (ram_slots[s->bank][s->slot] == NULL) {
+	ram_slots[s->bank][s->slot] = malloc(slots[s->slot].size);
+	if (ram_slots[s->bank][s->slot] == NULL) {
+	  fprintf(stderr, "INSERT_SECTIONS: Out of memory error.\n");
+	  return FAILED;
+	}
+	memset(ram_slots[s->bank][s->slot], 0, slots[s->slot].size);
+      }
     }
     s = s->next;
   }
@@ -113,7 +128,6 @@ int insert_sections(void) {
   i = 0;
   s = sec_first;
   while (s != NULL) {
-    /* no references - skip it */
     if (s->alive == YES)
       i++;
     s = s->next;
@@ -155,14 +169,23 @@ int insert_sections(void) {
 
     /* search for free space */
     if (s->status == SECTION_STATUS_RAM) {
-      c = ram_slots[s->slot];
+      int slotAddress = slots[s->slot].address;
+
+      /* align the starting address */
+      int address = slotAddress % s->alignment;
+      if (address != 0)
+	address = s->alignment - address;
+
+      c = ram_slots[s->bank][s->slot];
       i = slots[s->slot].size;
       t = 0;
-      for (x = 0; x < i; x++, c++) {
-	if (*c == 0) {
-	  for (q = 0; x < i && q < s->size; x++, q++, c++) {
-	    if (*c != 0)
+      for (; address < i; address += s->alignment) {
+	if (c[address] == 0) {
+	  for (q = 0; address + q < i && q < s->size; q++) {
+	    if (c[address + q] != 0) {
+	      address += q;
 	      break;
+	    }
 	  }
 	  if (q == s->size) {
 	    t = 1;
@@ -172,23 +195,30 @@ int insert_sections(void) {
       }
 
       if (t == 0) {
-	fprintf(stderr, "INSERT_SECTIONS: No room for RAM section \"%s\" (%d bytes) in slot %d.\n", s->name, s->size, s->slot);
+	fprintf(stderr, "INSERT_SECTIONS: No room for RAMSECTION \"%s\" (%d bytes) in slot %d.\n", s->name, s->size, s->slot);
 	return FAILED;
       }
 
+      s->address = address;
+      
       /* mark as used */
-      c = c - s->size;
-      for (i = 0; i < s->size; i++, c++)
-	*c = 1;
-
-      s->address = c - s->size - ram_slots[s->slot];
+      for (i = 0; i < s->size; i++, address++)
+	c[address] = 1;
     }
   }
 
   /* free tmp memory */
   for (i = 0; i < 256; i++) {
-    if (ram_slots[i] != NULL)
+    if (ram_slots[i] != NULL) {
+      for (p = 0; p < 256; p++) {
+	if (ram_slots[i][p] != NULL) {
+	  free(ram_slots[i][p]);
+	  ram_slots[i][p] = NULL;
+	}
+      }
       free(ram_slots[i]);
+      ram_slots[i] = NULL;
+    }
   }
 
   /* force sections */
@@ -207,12 +237,12 @@ int insert_sections(void) {
       s->output_address = d;
       section_overwrite = OFF;
       if (i > romsize) {
-	fprintf(stderr, "%s:%s: INSERT_SECTIONS: Section \"%s\" (%d bytes) goes beyond the ROM size.\n", get_file_name(s->file_id),
+	fprintf(stderr, "%s: %s: INSERT_SECTIONS: Section \"%s\" (%d bytes) goes beyond the ROM size.\n", get_file_name(s->file_id),
 		get_source_file_name(s->file_id, s->file_id_source), s->name, s->size);
 	return FAILED;
       }
       if (s->address + s->size > banksize) {
-	fprintf(stderr, "%s:%s: INSERT_SECTIONS: Section \"%s\" (%d bytes) overflows from ROM bank %d.\n", get_file_name(s->file_id),
+	fprintf(stderr, "%s: %s: INSERT_SECTIONS: Section \"%s\" (%d bytes) overflows from ROM bank %d.\n", get_file_name(s->file_id),
 		get_source_file_name(s->file_id, s->file_id_source), s->name, s->size, s->bank);
 	return FAILED;
       }
@@ -227,7 +257,7 @@ int insert_sections(void) {
 	}
       }
       else {
-	fprintf(stderr, "%s:%s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes).\n", get_file_name(s->file_id),
+	fprintf(stderr, "%s: %s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes).\n", get_file_name(s->file_id),
 		get_source_file_name(s->file_id, s->file_id_source), s->name, s->size);
 	return FAILED;
       }
@@ -272,7 +302,7 @@ int insert_sections(void) {
 	  break;
 	}
 	if (pc_bank == s->address) {
-	  fprintf(stderr, "%s:%s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes) in ROM bank %d.\n", get_file_name(s->file_id),
+	  fprintf(stderr, "%s: %s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes) in ROM bank %d.\n", get_file_name(s->file_id),
 		  get_source_file_name(s->file_id, s->file_id_source), s->name, s->size, s->bank);
 	  return FAILED;
 	}
@@ -324,7 +354,7 @@ int insert_sections(void) {
 	  break;
 	}
 	if (pc_bank == banksizes[s->bank]) {
-	  fprintf(stderr, "%s:%s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes) in ROM bank %d.\n", get_file_name(s->file_id),
+	  fprintf(stderr, "%s: %s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes) in ROM bank %d.\n", get_file_name(s->file_id),
 		  get_source_file_name(s->file_id, s->file_id_source), s->name, s->size, s->bank);
 	  return FAILED;
 	}
@@ -412,7 +442,7 @@ int insert_sections(void) {
 	    return FAILED;
       }
       else {
-	fprintf(stderr, "%s:%s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes).\n", get_file_name(s->file_id),
+	fprintf(stderr, "%s: %s: INSERT_SECTIONS: No room for section \"%s\" (%d bytes).\n", get_file_name(s->file_id),
 		get_source_file_name(s->file_id, s->file_id_source), s->name, s->size);
 	return FAILED;
       }
@@ -433,12 +463,12 @@ int insert_sections(void) {
       s->output_address = pc_full;
       section_overwrite = ON;
       if (pc_full + s->size > romsize) {
-	fprintf(stderr, "%s:%s: INSERT_SECTIONS: Section \"%s\" (%d bytes) goes beyond the ROM size.\n", get_file_name(s->file_id),
+	fprintf(stderr, "%s: %s: INSERT_SECTIONS: Section \"%s\" (%d bytes) goes beyond the ROM size.\n", get_file_name(s->file_id),
 		get_source_file_name(s->file_id, s->file_id_source), s->name, s->size);
 	return FAILED;
       }
       if (s->address + s->size > banksize) {
-	fprintf(stderr, "%s:%s: INSERT_SECTIONS: Section \"%s\" (%d bytes) overflows from ROM bank %d.\n", get_file_name(s->file_id),
+	fprintf(stderr, "%s: %s: INSERT_SECTIONS: Section \"%s\" (%d bytes) overflows from ROM bank %d.\n", get_file_name(s->file_id),
 		get_source_file_name(s->file_id, s->file_id_source), s->name, s->size, s->bank);
 	return FAILED;
       }
@@ -497,6 +527,7 @@ int transform_stack_definitions(void) {
       l->status = LABEL_STATUS_DEFINE;
       l->address = s->result;
     }
+    
     l = l->next;
   }
 
@@ -504,10 +535,119 @@ int transform_stack_definitions(void) {
 }
 
 
-int fix_labels(void) {
+int try_put_label(map_t map, struct label *l) {
+
+  int err;
+
+  
+  if (hashmap_get(map, l->name, NULL) == MAP_OK) {
+    if (l->status == LABEL_STATUS_DEFINE)
+      fprintf(stderr, "%s: TRY_PUT_LABEL: Definition \"%s\" was defined more than once.\n", get_file_name(l->file_id), l->name);
+    else
+      fprintf(stderr, "%s: %s:%d: TRY_PUT_LABEL: Label \"%s\" was defined more than once.\n", get_file_name(l->file_id),
+	      get_source_file_name(l->file_id, l->file_id_source), l->linenumber, l->name);
+    return FAILED;
+  }
+  if ((err = hashmap_put(map, l->name, l)) != MAP_OK) {
+    fprintf(stderr, "TRY_PUT_LABEL: Hashmap error %d. Please send a bug report!\n", err);
+    return FAILED;
+  }
+
+  return SUCCEEDED;
+}
+
+
+/* Determines the section for each label, and calls "insert_label_into_maps" for each. */
+int fix_label_sections(void) {
+
+  struct section *s;
+  struct label *l;
+
+  l = labels_first;
+  while (l != NULL) {
+    if (l->section_status == ON) {
+      /* Search for the label's section */
+      s = sec_first;
+      while (s != NULL) {
+        if (s->id == l->section) {
+          l->section_struct = s;
+          break;
+        }
+        s = s->next;
+      }
+
+      if (s == NULL) {
+        fprintf(stderr, "FIX_LABEL_SECTIONS: Internal error: couldn't find section %d for label \"%s\".\n",
+                l->section, l->name);
+        return FAILED;
+      }
+    }
+
+    insert_label_into_maps(l, 0);
+
+    l = l->next;
+  }
+
+  return SUCCEEDED;
+}
+
+
+
+/* Determines which hashmaps are relevant for the label, and adds it to them. */
+int insert_label_into_maps(struct label* l, int is_sizeof) {
+  int put_in_global = 1;
+  int put_in_anything = 1;
+  char* base_name;
+
+  /* for "sizeof" labels, "base_name" refers to the label name without the "_sizeof_"
+   * prefix. */
+  base_name = l->name;
+  if (is_sizeof)
+    base_name += 8;
+
+  if (l->status == LABEL_STATUS_SYMBOL
+      || l->status == LABEL_STATUS_BREAKPOINT
+      || is_label_anonymous(base_name) == SUCCEEDED) {
+    /* don't put anonymous labels, breakpoints, or symbols into any maps */
+    put_in_anything = 0;
+  }
+
+  if (l->section_status == ON) {
+    struct section *s;
+    
+    s = l->section_struct;
+
+    if (put_in_anything) {
+      /* put label into section's label map */
+      if (try_put_label(s->label_map, l) == FAILED)
+        return FAILED;
+
+      if (base_name[0] == '_')
+        put_in_global = 0;
+
+      /* put label into section's namespace's label map, if it's not a local label */
+      if (s->nspace != NULL && base_name[0] != '_') {
+        if (try_put_label(s->nspace->label_map, l) == FAILED)
+          return FAILED;
+        put_in_global = 0;
+      }
+    }
+  }
+
+  /* put the label into the global namespace */
+  if (put_in_anything && put_in_global) {
+    if (try_put_label(global_unique_label_map, l) == FAILED)
+      return FAILED;
+  }
+
+  return SUCCEEDED;
+}
+
+
+int fix_label_addresses(void) {
 
   struct section *s = NULL;
-  struct label *l, *m;
+  struct label *l;
 
   
   /* fix labels' addresses */
@@ -515,44 +655,22 @@ int fix_labels(void) {
   while (l != NULL) {
     if (l->status == LABEL_STATUS_LABEL || l->status == LABEL_STATUS_SYMBOL || l->status == LABEL_STATUS_BREAKPOINT) {
       if (l->section_status == ON) {
-	s = sec_first;
-	while (s != NULL) {
-	  if (s->id == l->section) {
-	    l->bank = s->bank;
-	    l->address += s->address;
-	    l->rom_address = l->address + bankaddress[l->bank];
-	    if (s->status != SECTION_STATUS_ABSOLUTE)
-	      l->address += slots[l->slot].address;
-	    break;
-	  }
-	  s = s->next;
-	}
+        if (l->section_struct == NULL) {
+          fprintf(stderr, "FIX_LABELS: Internal error: section_struct is NULL.\n");
+          return FAILED;
+        }
+        s = l->section_struct;
+        if (s->id == l->section) {
+          l->bank = s->bank;
+          l->address += s->address;
+          l->rom_address = (int)l->address + bankaddress[l->bank];
+          if (s->status != SECTION_STATUS_ABSOLUTE)
+            l->address += slots[l->slot].address;
+        }
       }
       else {
-	l->rom_address = l->address + bankaddress[l->bank];
-	l->address += slots[l->slot].address;
-      }
-    }
-    l = l->next;
-  }
-
-  /* check out if a label exists more than once in a different place */
-  l = labels_first;
-  while (l != NULL) {
-    if (is_label_anonymous(l->name) == FAILED && (l->status == LABEL_STATUS_LABEL || l->status == LABEL_STATUS_DEFINE)) {
-      m = l->next;
-      while (m != NULL) {
-	if (strcmp(m->name, l->name) == 0) {
-	  if (l->address != m->address && !(m->name[0] == '*' || m->name[0] == '_')) {
-	    if (l->status == LABEL_STATUS_DEFINE)
-	      fprintf(stderr, "%s: FIX_LABELS: Definition \"%s\" was defined more than once.\n", get_file_name(l->file_id), l->name);
-	    else
-	      fprintf(stderr, "%s:%s:%d: FIX_LABELS: Label \"%s\" was defined more than once.\n", get_file_name(l->file_id),
-		      get_source_file_name(l->file_id, l->file_id_source), l->linenumber, l->name);
-	    return FAILED;
-	  }
-	}
-	m = m->next;
+        l->rom_address = (int)l->address + bankaddress[l->bank];
+        l->address += slots[l->slot].address;
       }
     }
     l = l->next;
@@ -575,29 +693,31 @@ int fix_references(void) {
   /* insert references */
   r = reference_first;
   while (r != NULL) {
+    s = NULL;
+
     x = r->address;
     /* search for the section of the reference and fix the address */
     if (r->section_status == ON) {
       s = sec_first;
       while (s != NULL) {
-	if (s->id == r->section) {
-	  r->bank = s->bank;
-	  x += s->address;
-	  r->address += s->address;
-	  break;
-	}
-	s = s->next;
+        if (s->id == r->section) {
+          r->bank = s->bank;
+          x += s->address;
+          r->address += s->address;
+          break;
+        }
+        s = s->next;
       }
       /* reference is inside a discarded section? */
       if (s != NULL && s->alive == NO) {
-	r = r->next;
-	continue;
+        r = r->next;
+        continue;
       }
       if (s == NULL) {
-	if (write_bank_header_references(r) == FAILED)
-	  return FAILED;
-	r = r->next;
-	continue;
+        if (write_bank_header_references(r) == FAILED)
+          return FAILED;
+        r = r->next;
+        continue;
       }
     }
 
@@ -607,170 +727,141 @@ int fix_references(void) {
     }
 
     /* find the destination */
-    l = labels_first;
+    l = NULL;
 
     /* request for bank number? */
     if (r->name[0] == ':') {
-      if (is_label_anonymous(&r->name[1]) == SUCCEEDED) {
-	l = get_closest_anonymous_label(&r->name[1], x, r->file_id, l, r->section_status, r->section);
-      }
+      if (is_label_anonymous(&r->name[1]) == SUCCEEDED)
+        l = get_closest_anonymous_label(&r->name[1], x, r->file_id, r->section_status, r->section);
       else if (strcmp(&r->name[1], "CADDR") == 0 || strcmp(&r->name[1], "caddr") == 0) {
-	lt.status = LABEL_STATUS_LABEL;
-	strcpy(lt.name, &r->name[1]);
-	lt.address = r->address;
-	lt.bank = r->bank;
-	lt.section_status = OFF;
-	l = &lt;
+        lt.status = LABEL_STATUS_LABEL;
+        strcpy(lt.name, &r->name[1]);
+        lt.address = r->address;
+        lt.bank = r->bank;
+        lt.base = 0;
+        lt.section_status = OFF;
+        l = &lt;
       }
-      else {
-	while (l != NULL) {
-	  if (strcmp(l->name, &r->name[1]) == 0 && l->status != LABEL_STATUS_SYMBOL && l->status != LABEL_STATUS_BREAKPOINT)
-	    break;
-	  l = l->next;
-	}
-      }
+      else
+        find_label(&r->name[1], s, &l);
 
-      if (l == NULL) {
-	fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Bank number request for an unknown label \"%s\".\n",
+      if (l == NULL || l->status == LABEL_STATUS_SYMBOL || l->status == LABEL_STATUS_BREAKPOINT) {
+        fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Bank number request for an unknown label \"%s\".\n",
 		get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, &r->name[1]);
-	return FAILED;
+        return FAILED;
       }
 
       if (cpu_65816 != 0)
-	i = get_snes_pc_bank(l) >> 16;
+        i = get_snes_pc_bank(l) >> 16;
       else
-	i = l->bank;
+        i = l->base + l->bank;
 
       memory_file_id = r->file_id;
       memory_file_id_source = r->file_id_source;
       memory_line_number = r->linenumber;
 
-      /* direct 16bit */
+      /* direct 16-bit */
       if (r->type == REFERENCE_TYPE_DIRECT_16BIT || r->type == REFERENCE_TYPE_RELATIVE_16BIT) {
-	mem_insert_ref(x, i & 0xFF);
-	mem_insert_ref(x + 1, (i >> 8) & 0xFF);
+        mem_insert_ref(x, i & 0xFF);
+        mem_insert_ref(x + 1, (i >> 8) & 0xFF);
       }
-      /* direct / relative 8bit with a definition */
+      /* direct / relative 8-bit with a definition */
       else if (l->status == LABEL_STATUS_DEFINE) {
-	fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Bank number request for a definition \"%s\"?\n",
+        fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Bank number request for a definition \"%s\"?\n",
 		get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, l->name);
-	return FAILED;
+        return FAILED;
       }
-      /* direct 24bit */
+      /* direct 24-bit */
       else if (r->type == REFERENCE_TYPE_DIRECT_24BIT) {
-	mem_insert_ref(x, i & 0xFF);
-	mem_insert_ref(x + 1, (i >> 8) & 0xFF);
-	mem_insert_ref(x + 2, (i >> 16) & 0xFF);
+        mem_insert_ref(x, i & 0xFF);
+        mem_insert_ref(x + 1, (i >> 8) & 0xFF);
+        mem_insert_ref(x + 2, (i >> 16) & 0xFF);
       }
-      /* relative/direct 8bit with a label */
+      /* relative/direct 8-bit with a label */
       else {
-	mem_insert_ref(x, i & 0xFF);
+        mem_insert_ref(x, i & 0xFF);
       }
     }
     /* normal reference */
     else {
-      if (is_label_anonymous(r->name) == SUCCEEDED) {
-	l = get_closest_anonymous_label(r->name, x, r->file_id, l, r->section_status, r->section);
-      }
+      if (is_label_anonymous(r->name) == SUCCEEDED)
+        l = get_closest_anonymous_label(r->name, x, r->file_id, r->section_status, r->section);
       else if (strcmp(r->name, "CADDR") == 0 || strcmp(r->name, "caddr") == 0) {
-	lt.status = LABEL_STATUS_DEFINE;
-	strcpy(lt.name, r->name);
-	lt.address = r->address;
-	lt.bank = r->bank;
-	lt.section_status = OFF;
-	l = &lt;
+        lt.status = LABEL_STATUS_DEFINE;
+        strcpy(lt.name, r->name);
+        lt.address = r->address;
+        lt.bank = r->bank;
+        lt.base = 0;
+        lt.section_status = OFF;
+        l = &lt;
       }
-      else {
-	while (l != NULL) {
-	  if (strcmp(l->name, r->name) != 0 || l->status == LABEL_STATUS_SYMBOL || l->status == LABEL_STATUS_BREAKPOINT)
-	    l = l->next;
-	  else {
-	    /* search for the section of the referencee */
-	    if (r->name[0] == '_') {
-	      if (l->file_id == r->file_id) {
-		if (l->section_status != r->section_status) {
-		  l = l->next;
-		  continue;
-		}
-		if (l->section_status == ON && l->section != r->section) {
-		  l = l->next;
-		  continue;
-		}
-	      }
-	      else {
-		l = l->next;
-		continue;
-	      }
-	    }
-	    break;
-	  }
-	}
-      }
+      else
+        find_label(r->name, s, &l);
 
-      if (l == NULL) {
-	fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Reference to an unknown label \"%s\".\n",
+      if (l == NULL || l->status == LABEL_STATUS_SYMBOL || l->status == LABEL_STATUS_BREAKPOINT) {
+        fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Reference to an unknown label \"%s\".\n",
 		get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, r->name);
-	return FAILED;
+        return FAILED;
       }
 
       memory_file_id = r->file_id;
       memory_file_id_source = r->file_id_source;
       memory_line_number = r->linenumber;
 
-      /* direct 16bit */
+      /* direct 16-bit */
       if (r->type == REFERENCE_TYPE_DIRECT_16BIT) {
-	i = l->address;
-	mem_insert_ref(x, i & 0xFF);
-	mem_insert_ref(x + 1, (i >> 8) & 0xFF);
+        i = (int)l->address;
+        mem_insert_ref(x, i & 0xFF);
+        mem_insert_ref(x + 1, (i >> 8) & 0xFF);
       }
-      /* direct / relative 8bit with a value definition */
+      /* direct / relative 8-bit with a value definition */
       else if (l->status == LABEL_STATUS_DEFINE && (r->type == REFERENCE_TYPE_DIRECT_8BIT || r->type == REFERENCE_TYPE_RELATIVE_8BIT)) {
-	i = ((int)l->address) & 0xFFFF;
-	if (i > 255 || i < -128) {
-	  fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Value ($%x) of \"%s\" is too much to be a 8bit value.\n",
+        i = ((int)l->address) & 0xFFFF;
+        if (i > 255 || i < -128) {
+          fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Value ($%x) of \"%s\" is too much to be a 8-bit value.\n",
 		  get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, i, l->name);
-	  return FAILED;
-	}
-	mem_insert_ref(x, i & 0xFF);
+          return FAILED;
+        }
+        mem_insert_ref(x, i & 0xFF);
       }
-      /* direct 24bit */
+      /* direct 24-bit */
       else if (r->type == REFERENCE_TYPE_DIRECT_24BIT) {
-	i = l->address;
-	if (l->status == LABEL_STATUS_LABEL)
-	  i += get_snes_pc_bank(l);
-	mem_insert_ref(x, i & 0xFF);
-	mem_insert_ref(x + 1, (i >> 8) & 0xFF);
-	mem_insert_ref(x + 2, (i >> 16) & 0xFF);
+        i = (int)l->address;
+        if (l->status == LABEL_STATUS_LABEL)
+          i += get_snes_pc_bank(l);
+        mem_insert_ref(x, i & 0xFF);
+        mem_insert_ref(x + 1, (i >> 8) & 0xFF);
+        mem_insert_ref(x + 2, (i >> 16) & 0xFF);
       }
-      /* relative 8bit with a label */
+      /* relative 8-bit with a label */
       else if (r->type == REFERENCE_TYPE_RELATIVE_8BIT) {
-	i = (((int)l->address) & 0xFFFF) - r->address - 1;
-	if (i < -128 || i > 127) {
-	  fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Too large distance (%d bytes from $%x to $%x \"%s\") for a 8bit reference.\n",
+        i = (((int)l->address) & 0xFFFF) - r->address - 1;
+        if (i < -128 || i > 127) {
+          fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Too large distance (%d bytes from $%x to $%x \"%s\") for a 8-bit reference.\n",
 		  get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, i, r->address, (int)l->address, l->name);
-	  return FAILED;
-	}
-	mem_insert_ref(x, i & 0xFF);
+          return FAILED;
+        }
+        mem_insert_ref(x, i & 0xFF);
       }
-      /* relative 16bit with a label */
+      /* relative 16-bit with a label */
       else if (r->type == REFERENCE_TYPE_RELATIVE_16BIT) {
-	i = (((int)l->address) & 0xFFFF) - r->address - 2;
-	if (i < -32768 || i > 65535) {
-	  fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Too large distance (%d bytes from $%x to $%x \"%s\") for a 16bit reference.\n",
+        i = (((int)l->address) & 0xFFFF) - r->address - 2;
+        if (i < -32768 || i > 65535) {
+          fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Too large distance (%d bytes from $%x to $%x \"%s\") for a 16-bit reference.\n",
 		  get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, i, r->address, (int)l->address, l->name);
-	  return FAILED;
-	}
-	mem_insert_ref(x, i & 0xFF);
-	mem_insert_ref(x + 1, (i >> 8) & 0xFF);
+          return FAILED;
+        }
+        mem_insert_ref(x, i & 0xFF);
+        mem_insert_ref(x + 1, (i >> 8) & 0xFF);
       }
       else {
-	i = ((int)l->address) & 0xFFFF;
-	if (i > 255) {
-	  fprintf(stderr, "%s:%s:%d: FIX_REFERENCES: Value ($%x) of \"%s\" is too much to be a 8bit value.\n",
+        i = ((int)l->address) & 0xFFFF;
+        if (i > 255) {
+          fprintf(stderr, "%s: %s:%d: FIX_REFERENCES: Value ($%x) of \"%s\" is too much to be a 8-bit value.\n",
 		  get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, i, l->name);
-	  return FAILED;
-	}
-	mem_insert_ref(x, i & 0xFF);
+          return FAILED;
+        }
+        mem_insert_ref(x, i & 0xFF);
       }
     }
 
@@ -832,12 +923,12 @@ int write_symbol_file(char *outname, unsigned char mode) {
       }
       if (l->status == LABEL_STATUS_LABEL) {
 	if (snes_mode == 0)
-	  fprintf(f, "%.4x:%.4x %s\n", l->bank, (int)l->address, l->name);
+	  fprintf(f, "%.2x:%.4x %s\n", l->base + l->bank, (int)l->address, l->name);
 	else
-	  fprintf(f, "%.4x:%.4x %s\n", get_snes_pc_bank(l)>>16, (int)l->address, l->name);
+	  fprintf(f, "%.2x:%.4x %s\n", get_snes_pc_bank(l)>>16, (int)l->address, l->name);
       }
       else
-	fprintf(f, "0000:%.4x %s\n", (int)l->address, l->name);
+	fprintf(f, "00:%.4x %s\n", (int)l->address, l->name);
       l = l->next;
     }
   }
@@ -881,9 +972,9 @@ int write_symbol_file(char *outname, unsigned char mode) {
 	}
 	
 	if (snes_mode == 0)
-	  fprintf(f, "%.4x:%.4x %s\n", l->bank, (int)l->address, l->name);
+	  fprintf(f, "%.2x:%.4x %s\n", l->base + l->bank, (int)l->address, l->name);
 	else
-	  fprintf(f, "%.4x:%.4x %s\n", get_snes_pc_bank(l)>>16, (int)l->address, l->name);
+	  fprintf(f, "%.2x:%.4x %s\n", get_snes_pc_bank(l)>>16, (int)l->address, l->name);
 	
 	l = l->next;
       }
@@ -910,9 +1001,9 @@ int write_symbol_file(char *outname, unsigned char mode) {
 	}
 	
 	if (snes_mode == 0)
-	  fprintf(f, "%.4x:%.4x %s\n", l->bank, (int)l->address, l->name);
+	  fprintf(f, "%.2x:%.4x %s\n", l->bank, (int)l->address, l->name);
 	else
-	  fprintf(f, "%.4x:%.4x %s\n", get_snes_pc_bank(l)>>16, (int)l->address, l->name);
+	  fprintf(f, "%.2x:%.4x %s\n", get_snes_pc_bank(l)>>16, (int)l->address, l->name);
 	
 	l = l->next;
       }
@@ -939,9 +1030,9 @@ int write_symbol_file(char *outname, unsigned char mode) {
 	}
 
 	if (snes_mode == 0)
-	  fprintf(f, "%.4x:%.4x\n", l->bank, (int)l->address);
+	  fprintf(f, "%.2x:%.4x\n", l->bank, (int)l->address);
 	else
-	  fprintf(f, "%.4x:%.4x\n", get_snes_pc_bank(l)>>16, (int)l->address);
+	  fprintf(f, "%.2x:%.4x\n", get_snes_pc_bank(l)>>16, (int)l->address);
 	
 	l = l->next;
       }
@@ -1065,7 +1156,6 @@ int compute_pending_calculations(void) {
   /* first place the calculation stacks into the output */
   sta = stacks_first;
   while (sta != NULL) {
-
     if (sta->position == STACK_POSITION_DEFINITION) {
       /* skip definition stacks */
       sta = sta->next;
@@ -1192,7 +1282,7 @@ int compute_pending_calculations(void) {
 
     if (sta->type == STACKS_TYPE_8BIT) {
       if (k < -128 || k > 255) {
-	fprintf(stderr, "%s:%s:%d: COMPUTE_PENDING_CALCULATIONS: Result (%d/$%x) of a computation is out of 8bit range.\n",
+	fprintf(stderr, "%s: %s:%d: COMPUTE_PENDING_CALCULATIONS: Result (%d/$%x) of a computation is out of 8-bit range.\n",
 		get_file_name(sta->file_id), get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, k, k);
 	return FAILED;
       }
@@ -1201,7 +1291,7 @@ int compute_pending_calculations(void) {
     }
     else if (sta->type == STACKS_TYPE_16BIT) {
       if (k < -32768 || k > 65535) {
-	fprintf(stderr, "%s:%s:%d: COMPUTE_PENDING_CALCULATIONS: Result (%d/$%x) of a computation is out of 16bit range.\n",
+	fprintf(stderr, "%s: %s:%d: COMPUTE_PENDING_CALCULATIONS: Result (%d/$%x) of a computation is out of 16-bit range.\n",
 		get_file_name(sta->file_id), get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, k, k);
 	return FAILED;
       }
@@ -1212,7 +1302,7 @@ int compute_pending_calculations(void) {
     }
     else {
       if (k < -8388608 || k > 16777215) {
-	fprintf(stderr, "%s:%s:%d: COMPUTE_PENDING_CALCULATIONS: Result (%d/$%x) of a computation is out of 24bit range.\n",
+	fprintf(stderr, "%s: %s:%d: COMPUTE_PENDING_CALCULATIONS: Result (%d/$%x) of a computation is out of 24-bit range.\n",
 		get_file_name(sta->file_id), get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, k, k);
 	return FAILED;
       }
@@ -1232,6 +1322,21 @@ int compute_pending_calculations(void) {
 }
 
 
+struct stack *find_stack(int id, int file_id) {
+
+  struct stack *st = stacks_first;
+
+  
+  while (st != NULL) {
+    if (st->id == id && st->file_id == file_id)
+      return st;
+    st = st->next;
+  }
+
+  return NULL;
+}
+
+
 int compute_stack(struct stack *sta, int *result) {
 
   struct stackitem *s;
@@ -1241,7 +1346,7 @@ int compute_stack(struct stack *sta, int *result) {
 
   
   if (sta->under_work == YES) {
-    fprintf(stderr, "%s:%s:%d: COMPUTE_STACK: A loop found in computation.\n", get_file_name(sta->file_id),
+    fprintf(stderr, "%s: %s:%d: COMPUTE_STACK: A loop found in computation.\n", get_file_name(sta->file_id),
 	    get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber);
     return FAILED;
   }
@@ -1253,6 +1358,22 @@ int compute_stack(struct stack *sta, int *result) {
 
   sta->under_work = YES;
 
+  /*
+  {
+    char *get_stack_item_description(struct stackitem *si);
+    int z;
+    
+    printf("----------------------------------------------------------------------\n");
+	
+    for (z = 0; z < sta->stacksize; z++) {
+      struct stackitem *si = &sta->stack[z];
+      printf(get_stack_item_description(si));
+    }
+
+    printf("id: %d file: %s line: %d type %d bank: %d position %d\n", sta->id, get_file_name(sta->file_id), sta->linenumber, sta->type, sta->bank, sta->position);
+  }
+  */
+  
   x = sta->stacksize;
   s = sta->stack;
   for (r = 0, t = 0; r < x; r++, s++) {
@@ -1265,12 +1386,8 @@ int compute_stack(struct stack *sta, int *result) {
     }
     else if (s->type == STACK_ITEM_TYPE_STACK) {
       /* we have a stack inside a stack! find the stack */
-      st = stacks_first;
-      while (st != NULL) {
-	if (st->id == s->value && st->file_id == s->sign)
-	  break;
-	st = st->next;
-      }
+      /* HACK! we abuse sign here... */
+      st = find_stack((int)s->value, s->sign);
 
       if (st == NULL) {
 	fprintf(stderr, "COMPUTE_STACK: A computation stack has gone missing. This is a fatal internal error. Please send the WLA DX author a bug report.\n");
@@ -1294,10 +1411,10 @@ int compute_stack(struct stack *sta, int *result) {
 	t--;
 	break;
       case SI_OP_XOR:
-	/* 16bit XOR? */
+	/* 16-bit XOR? */
 	if (v[t - 2] > 0xFF || v[t - 2] < -128 || v[t - 1] > 0xFF || v[t - 1] < -128)
 	  v[t - 2] = ((int)v[t - 1] ^ (int)v[t - 2]) & 0xFFFF;
-	/* 8bit XOR */
+	/* 8-bit XOR */
 	else
 	  v[t - 2] = ((int)v[t - 1] ^ (int)v[t - 2]) & 0xFF;
 	t--;
@@ -1324,7 +1441,7 @@ int compute_stack(struct stack *sta, int *result) {
 	break;
       case SI_OP_MODULO:
 	if (((int)v[t - 1]) == 0) {
-	  fprintf(stderr, "%s:%s:%d: COMPUTE_STACK: Modulo by zero.\n", get_file_name(sta->file_id),
+	  fprintf(stderr, "%s: %s:%d: COMPUTE_STACK: Modulo by zero.\n", get_file_name(sta->file_id),
 		  get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber);
 	  return FAILED;
 	}
@@ -1332,8 +1449,8 @@ int compute_stack(struct stack *sta, int *result) {
 	t--;
 	break;
       case SI_OP_DIVIDE:
-	if (((int)v[t - 1]) == 0) {
-	  fprintf(stderr, "%s:%s:%d: COMPUTE_STACK: Division by zero.\n", get_file_name(sta->file_id),
+	if (v[t - 1] == 0.0) {
+	  fprintf(stderr, "%s: %s:%d: COMPUTE_STACK: Division by zero.\n", get_file_name(sta->file_id),
 		  get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber);
 	  return FAILED;
 	}
@@ -1359,11 +1476,15 @@ int compute_stack(struct stack *sta, int *result) {
     }
   }
 
-  *result = v[0];
-  sta->result = v[0];
+  *result = (int)v[0];
+  sta->result = (int)v[0];
   sta->computed = YES;
   sta->under_work = NO;
 
+  /*
+  printf("RESULT: %d\n", sta->result);
+  */
+  
   return SUCCEEDED;
 }
 
@@ -1391,7 +1512,7 @@ int write_bank_header_calculations(struct stack *sta) {
 
   if (sta->type == STACKS_TYPE_8BIT) {
     if (k < -128 || k > 255) {
-      fprintf(stderr, "%s:%s:%d: WRITE_BANK_HEADER_CALCULATIONS: Result (%d/$%x) of a computation is out of 8bit range.\n",
+      fprintf(stderr, "%s: %s:%d: WRITE_BANK_HEADER_CALCULATIONS: Result (%d/$%x) of a computation is out of 8-bit range.\n",
 	      get_file_name(sta->file_id), get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, k, k);
       return FAILED;
     }
@@ -1399,7 +1520,7 @@ int write_bank_header_calculations(struct stack *sta) {
   }
   else if (sta->type == STACKS_TYPE_16BIT) {
     if (k < -32768 || k > 65535) {
-      fprintf(stderr, "%s:%s:%d: WRITE_BANK_HEADER_CALCULATIONS: Result (%d/$%x) of a computation is out of 16bit range.\n",
+      fprintf(stderr, "%s: %s:%d: WRITE_BANK_HEADER_CALCULATIONS: Result (%d/$%x) of a computation is out of 16-bit range.\n",
 	      get_file_name(sta->file_id), get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, k, k);
       return FAILED;
     }
@@ -1409,7 +1530,7 @@ int write_bank_header_calculations(struct stack *sta) {
   }
   else {
     if (k < -8388608 || k > 16777215) {
-      fprintf(stderr, "%s:%s:%d: WRITE_BANK_HEADER_CALCULATIONS: Result (%d/$%x) of a computation is out of 24bit range.\n",
+      fprintf(stderr, "%s: %s:%d: WRITE_BANK_HEADER_CALCULATIONS: Result (%d/$%x) of a computation is out of 24-bit range.\n",
 	      get_file_name(sta->file_id), get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, k, k);
       return FAILED;
     }
@@ -1439,48 +1560,42 @@ int write_bank_header_references(struct reference *r) {
   t = s->data + r->address;
 
   /* find the destination */
-  l = labels_first;
-  while (l != NULL) {
-    if (strcmp(l->name, r->name) == 0) {
-      a = l->address;
-      /* direct 16bit */
-      if (r->type == REFERENCE_TYPE_DIRECT_16BIT) {
-	*t = a & 0xFF;
-	t++;
-	*t = (a >> 8) & 0xFF;
-	break;
-      }
-      /* direct 8bit */
-      else if (r->type == REFERENCE_TYPE_DIRECT_8BIT) {
-	if (a > 255 || a < -128) {
-	  fprintf(stderr, "%s:%s:%d: WRITE_BANK_HEADER_REFERENCES: Value (%d/$%x) of \"%s\" is too much to be a 8bit value.\n",
-		  get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, a, a, l->name);
-	  return FAILED;
-	}
-	*t = a & 0xFF;
-	break;
-      }
-      /* direct 24bit */
-      else if (r->type == REFERENCE_TYPE_DIRECT_24BIT) {
-	if (l->status == LABEL_STATUS_LABEL)
-	  a += get_snes_pc_bank(l);
-	*t = a & 0xFF;
-	t++;
-	*t = (a >> 8) & 0xFF;
-	t++;
-	*t = (a >> 16) & 0xFF;
-	break;
-      }
-      else {
-	fprintf(stderr, "%s:%s:%d: WRITE_BANK_HEADER_REFERENCES: A relative reference (type %d) to label \"%s\".\n",
-		get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, r->type, l->name);
-	return FAILED;
-      }
+  find_label(r->name, s, &l);
+  if (l != NULL) {
+    a = (int)l->address;
+    /* direct 16-bit */
+    if (r->type == REFERENCE_TYPE_DIRECT_16BIT) {
+      *t = a & 0xFF;
+      t++;
+      *t = (a >> 8) & 0xFF;
     }
-    l = l->next;
+    /* direct 8-bit */
+    else if (r->type == REFERENCE_TYPE_DIRECT_8BIT) {
+      if (a > 255 || a < -128) {
+        fprintf(stderr, "%s: %s:%d: WRITE_BANK_HEADER_REFERENCES: Value (%d/$%x) of \"%s\" is too much to be a 8-bit value.\n",
+		get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, a, a, l->name);
+        return FAILED;
+      }
+      *t = a & 0xFF;
+    }
+    /* direct 24-bit */
+    else if (r->type == REFERENCE_TYPE_DIRECT_24BIT) {
+      if (l->status == LABEL_STATUS_LABEL)
+        a += get_snes_pc_bank(l);
+      *t = a & 0xFF;
+      t++;
+      *t = (a >> 8) & 0xFF;
+      t++;
+      *t = (a >> 16) & 0xFF;
+    }
+    else {
+      fprintf(stderr, "%s: %s:%d: WRITE_BANK_HEADER_REFERENCES: A relative reference (type %d) to label \"%s\".\n",
+	      get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, r->type, l->name);
+      return FAILED;
+    }
   }
-  if (l == NULL) {
-    fprintf(stderr, "%s:%s:%d: WRITE_BANK_HEADER_REFERENCES: Reference to an unknown label \"%s\".\n",
+  else {
+    fprintf(stderr, "%s: %s:%d: WRITE_BANK_HEADER_REFERENCES: Reference to an unknown label \"%s\".\n",
 	    get_file_name(r->file_id), get_source_file_name(r->file_id, r->file_id_source), r->linenumber, r->name);
     return FAILED;
   }
@@ -1493,21 +1608,33 @@ int write_bank_header_references(struct reference *r) {
 int parse_stack(struct stack *sta) {
 
   struct stackitem *si;
+  struct section *s;
   struct label *l, lt;
   double k;
   int g;
+  
+
+  s = NULL;
+  if (sta->section_status != 0) {
+    s = sec_first;
+    while (s != NULL) {
+      if (s->id == sta->section)
+        break;
+      s = s->next;
+    }
+  }
 
   si = sta->stack;
   g = 0;
   k = 0;
   while (g != sta->stacksize) {
     if (si->type == STACK_ITEM_TYPE_STRING) {
-      l = labels_first;
+      l = NULL;
 
       /* bank number search */
       if (si->string[0] == ':') {
 	if (is_label_anonymous(&si->string[1]) == SUCCEEDED) {
-	  l = get_closest_anonymous_label(&si->string[1], sta->address, sta->file_id, l, sta->section_status, sta->section);
+	  l = get_closest_anonymous_label(&si->string[1], sta->address, sta->file_id, sta->section_status, sta->section);
 	  if (l != NULL)
 	    k = l->bank;
 	}
@@ -1517,22 +1644,20 @@ int parse_stack(struct stack *sta) {
 	  l = &lt;
 	}
 	else {
-	  while (l != NULL) {
-	    if (strcmp(l->name, &si->string[1]) == 0) {
-	      if (cpu_65816 != 0)
-		k = get_snes_pc_bank(l) >> 16;
-	      else
-		k = l->bank;
-	      break;
-	    }
-	    l = l->next;
-	  }
+          find_label(&si->string[1], s, &l);
+
+          if (l != NULL) {
+            if (cpu_65816 != 0)
+              k = get_snes_pc_bank(l) >> 16;
+            else
+              k = l->base + l->bank;
+          }
 	}
       }
       /* normal label address search */
       else {
 	if (is_label_anonymous(si->string) == SUCCEEDED) {
-	  l = get_closest_anonymous_label(si->string, sta->address, sta->file_id, l, sta->section_status, sta->section);
+	  l = get_closest_anonymous_label(si->string, sta->address, sta->file_id, sta->section_status, sta->section);
 	  if (l != NULL)
 	    k = l->address;
 
@@ -1546,34 +1671,20 @@ int parse_stack(struct stack *sta) {
 	  l = &lt;
 	}
 	else {
-	  while (l != NULL) {
-	    if (strcmp(l->name, si->string) == 0) {
-	      if (si->string[0] == '_') {
-		if (sta->section == l->section) {
-		  k = l->address;
-		  break;
-		}
-		else {
-		  l = l->next;
-		  continue;
-		}
-	      }
-	      else {
-		k = l->address;
-		break;
-	      }
-	    }
-	    l = l->next;
-	  }
+          find_label(si->string, s, &l);
 
-	  /* is the reference relative? */
-	  if (l != NULL && sta->relative_references == YES)
-	    k = k - sta->memory_address - 1;
+          if (l != NULL) {
+            k = l->address;
+
+            /* is the reference relative? */
+            if (sta->relative_references == YES)
+              k = k - sta->memory_address - 1;
+          }
 	}
       }
 
       if (l == NULL) {
-	fprintf(stderr, "%s:%s:%d: PARSE_STACK: Unresolved reference to \"%s\".\n", get_file_name(sta->file_id),
+	fprintf(stderr, "%s: %s:%d: PARSE_STACK: Unresolved reference to \"%s\".\n", get_file_name(sta->file_id),
 		get_source_file_name(sta->file_id, sta->file_id_source), sta->linenumber, si->string);
 	return FAILED;
       }
@@ -1583,7 +1694,7 @@ int parse_stack(struct stack *sta) {
 	k += get_snes_pc_bank(l);
 
       if (l->status == LABEL_STATUS_STACK) {
-	/* here we abuse the stack item structure's members */
+	/* HACK: here we abuse the stack item structure's members */
 	si->value = l->address;
 	si->sign = l->file_id;
 	si->type = STACK_ITEM_TYPE_STACK;
@@ -1676,14 +1787,89 @@ int is_label_anonymous(char *label) {
 }
 
 
-struct label *get_closest_anonymous_label(char *name, int rom_address, int file_id, struct label *l, int section_status, int section) {
+static int _labels_compare(const void *a, const void *b) {
+  const struct label *l1 = a;
+  const struct label *l2 = b;
 
+  if (l1->section_status == OFF && l2->section_status == ON)
+    return 1;
+  if (l1->section_status == ON && l2->section_status == OFF)
+    return -1;
+
+  if (l1->section > l2->section)
+    return 1;
+  else if (l1->section < l2->section)
+    return -1;
+
+  if (l1->rom_address > l2->rom_address)
+    return 1;
+  else if (l1->rom_address < l2->rom_address)
+    return -1;
+
+  if (l1->linenumber > l2->linenumber)
+    return 1;
+
+  return -1;
+}
+
+static int _labels_sort(const void *a, const void *b) {
+  return _labels_compare(*(void**)a, *(void**)b);
+}
+
+
+int sort_anonymous_labels() {
+  int j=0;
+  struct label *l;
+
+  num_sorted_anonymous_labels = 0;
+
+  /* Count # of anonymous labels */
+  l = labels_first;
+  while (l != NULL) {
+    if (is_label_anonymous(l->name) == SUCCEEDED)
+      num_sorted_anonymous_labels++;
+    l = l->next;
+  }
+
+  if (num_sorted_anonymous_labels == 0)
+    return SUCCEEDED;
+
+  sorted_anonymous_labels = malloc(sizeof(struct label *) * num_sorted_anonymous_labels);
+  if (sorted_anonymous_labels == NULL) {
+    fprintf(stderr, "SORT_ANONYMOUS_LABELS: Out of memory error.\n");
+    return FAILED;
+  }
+
+  /* Load anonymous labels */
+  l = labels_first;
+  while (l != NULL) {
+    if (is_label_anonymous(l->name) == SUCCEEDED)
+      sorted_anonymous_labels[j++] = l;
+    l = l->next;
+  }
+
+  qsort(sorted_anonymous_labels, num_sorted_anonymous_labels, sizeof(struct label *), _labels_sort);
+
+
+  return SUCCEEDED;
+}
+
+
+/* sort_anonymous_labels must be called before this. */
+/* Though currently, this doesn't take advantage of the fact that they're sorted. */
+struct label *get_closest_anonymous_label(char *name, int rom_address, int file_id, int section_status, int section) {
+
+  struct label *l;
   struct label *closest = NULL;
-  int d = 999999, e;
+  int d = 999999999, e;
+  int j;
 
   
+  j = 0;
+
   if (strcmp(name, "_b") == 0 || strcmp(name, "_B") == 0) {
-    while (l != NULL) {
+    while (j < num_sorted_anonymous_labels) {
+      l = sorted_anonymous_labels[j];
       if (strcmp("__", l->name) == 0 && file_id == l->file_id && section_status == l->section_status) {
 	if (section_status == OFF || (section_status == ON && section == l->section)) {
 	  e = rom_address - l->rom_address;
@@ -1693,13 +1879,14 @@ struct label *get_closest_anonymous_label(char *name, int rom_address, int file_
 	  }
 	}
       }
-      l = l->next;
+      j++;
     }
     return closest;
   }
 
   if (strcmp(name, "_f") == 0 || strcmp(name, "_F") == 0) {
-    while (l != NULL) {
+    while (j < num_sorted_anonymous_labels) {
+      l = sorted_anonymous_labels[j];
       if (strcmp("__", l->name) == 0 && file_id == l->file_id && section_status == l->section_status) {
 	if (section_status == OFF || (section_status == ON && section == l->section)) {
 	  e = l->rom_address - rom_address;
@@ -1709,33 +1896,144 @@ struct label *get_closest_anonymous_label(char *name, int rom_address, int file_
 	  }
 	}
       }
-      l = l->next;
+      j++;
     }
     return closest;
   }
 
+  j = 0;
   /* -, --, +, ++, ... */
-  while (l != NULL) {
+  while (j < num_sorted_anonymous_labels) {
+    l = sorted_anonymous_labels[j];
     if (strcmp(name, l->name) == 0 && file_id == l->file_id && section_status == l->section_status) {
       if (section_status == OFF || (section_status == ON && section == l->section)) {
-	if (name[0] == '-') {
-	  e = rom_address - l->rom_address;
-	  if (e >= 0 && e < d) {
-	    closest = l;
-	    d = e;
-	  }
-	}
-	else {
-	  e = l->rom_address - rom_address;
-	  if (e > 0 && e < d) {
-	    closest = l;
-	    d = e;
-	  }
-	}
+        if (name[0] == '-') {
+          e = rom_address - l->rom_address;
+          if (e >= 0 && e < d) {
+            closest = l;
+            d = e;
+          }
+        }
+        else {
+          e = l->rom_address - rom_address;
+          if (e > 0 && e < d) {
+            closest = l;
+            d = e;
+          }
+        }
       }
     }
-    l = l->next;
+    j++;
   }
 
   return closest;
+}
+
+
+int generate_sizeof_label_definitions(void) {
+
+  struct label *l, *lastL, **labels = NULL;
+  int labelsN = 0, j;
+
+
+  if (labels_first == NULL)
+    return SUCCEEDED;
+  
+  /* generate _sizeof_[label] definitions */
+  l = labels_first;
+  lastL = NULL;
+  while (l != NULL) {
+    /* skip anonymous labels & child labels */
+    if (l->status == LABEL_STATUS_LABEL && is_label_anonymous(l->name) != SUCCEEDED
+        && (lastL == NULL
+            || !(strncmp(lastL->name, l->name, strlen(lastL->name)) == 0
+                && l->name[strlen(lastL->name)] == '@'))) {
+      labelsN++;
+      lastL = l;
+    }
+
+    l = l->next;
+  }
+
+  if (labelsN <= 1)
+    return SUCCEEDED;
+
+  labels = malloc(sizeof(struct label *) * labelsN);
+  if (labels == NULL) {
+    fprintf(stderr, "GENERATE_SIZEOF_LABEL_DEFINITIONS: Out of memory error.\n");
+    return FAILED;
+  }
+  
+  j = 0;
+  l = labels_first;
+  lastL = NULL;
+  while (l != NULL) {
+    /* skip anonymous labels & child labels */
+    if (l->status == LABEL_STATUS_LABEL && is_label_anonymous(l->name) != SUCCEEDED
+        && (lastL == NULL
+            || !(strncmp(lastL->name, l->name, strlen(lastL->name)) == 0
+                && l->name[strlen(lastL->name)] == '@'))) {
+      labels[j++] = l;
+      lastL = l;
+    }
+
+    l = l->next;
+  }
+      
+  /* sort the labels by address, smallest first */
+  qsort(labels, labelsN, sizeof(struct label *), _labels_sort);
+
+  /*
+  for (j = 0; j < labelsN; j++) {
+    fprintf(stderr, "LABEL: %s:%d section=%d\n", labels[j]->name, labels[j]->rom_address, labels[j]->section);
+  }
+  */
+  
+  for (j = 0; j < labelsN; j++) {
+    double size;
+    if (j == labelsN - 1 || labels[j]->section != labels[j+1]->section)
+      /* last label in this section */
+        if (labels[j]->section_struct != NULL)
+          size = labels[j]->section_struct->output_address + labels[j]->section_struct->size - labels[j]->rom_address;
+      else
+        continue;
+    else
+      size = labels[j+1]->rom_address - labels[j]->rom_address;
+    l = calloc(1, sizeof(struct label));
+    if (l == NULL) {
+      fprintf(stderr, "GENERATE_SIZEOF_LABEL_DEFINITIONS: Out of memory error.\n");
+      free(labels);
+      return FAILED;
+    }
+
+    if (strlen(labels[j]->name)+8 > MAX_NAME_LENGTH) {
+      fprintf(stderr, "GENERATE_SIZEOF_LABEL_DEFINITIONS: Expanded label name \"_sizeof_%s\" is %d bytes too large.\n",
+              labels[j]->name,
+              (int)(strlen(labels[j]->name)-MAX_NAME_LENGTH+8));
+      free(labels);
+      return FAILED;
+    }
+
+    sprintf(l->name, "_sizeof_%s", labels[j]->name);
+    l->status = LABEL_STATUS_DEFINE;
+    l->address = size;
+    l->base = 0;
+    l->file_id = labels[j]->file_id;
+
+    l->section_status = labels[j]->section_status;
+    l->section_struct = labels[j]->section_struct;
+    l->section        = labels[j]->section;
+
+    if (insert_label_into_maps(l, 1) == FAILED) {
+      free(labels);
+      return FAILED;
+    }
+
+
+    add_label(l);
+  }
+  
+  free(labels);
+  
+  return SUCCEEDED;
 }

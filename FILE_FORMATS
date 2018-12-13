@@ -3,7 +3,7 @@ NOTE! integers are in big endian format.
 
 
 
-WLA GB-Z80/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 object file format "WLAL"
+WLA GB-Z80/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 object file format "WLAO"
 
 
 bytes   description
@@ -11,7 +11,7 @@ bytes   description
 header:
 
   4     format information,
-        "WLAL" - WLA GB-Z80/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 object file version 14 (18-Oct-2014)
+        "WLAO" - WLA GB-Z80/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 object file version 16 (18-May-2017)
   1     empty fill
   1     misc bits (bit 0 - sms checksum (1 == compute)
                    bit 1 - snes rom mode (0 == lorom, 1 == hirom)
@@ -24,7 +24,8 @@ header:
   1     more bits (bit 0 - smc (1 == add smc rom header)
                    bit 1 - snes sram size, lower bit
                    bit 2 - snes sram size, higher bit
-		   bit 3 - sms tag (1 == inject))
+		   bit 3 - sms tag (1 == inject)
+		   bit 4 - sms header (1 == inject))
 
 rom bank map:
 
@@ -77,8 +78,8 @@ outside references:
   4     number of references (int)
   ...
   n     label (0 terminated)
-  1     type (0 = direct 16bit, 1 = relative 8bit, 2 = direct 8bit, 3 = direct 24bit,
-              4 = relative 16bit)
+  1     type (0 = direct 16-bit, 1 = relative 8-bit, 2 = direct 8-bit, 3 = direct 24-bit,
+              4 = relative 16-bit)
   1     file id
   1     slot number (0-255)
   4     section (0 = no section, 1+ = section id) (int)
@@ -92,7 +93,7 @@ pending calculations:
   4     number of pending calculations (int)
   ...
   4     id (int)
-  1     result type (0 = 8bit, 1 = 16bit, 2 = 24bit)
+  1     result type (0 = 8-bit, 1 = 16-bit, 2 = 24-bit)
         if bit 7 ~ 1, then the label references are relative, else absolute
   4     section (0 = no section, 1+ = section id) (int)
   1     file id
@@ -108,6 +109,14 @@ pending calculations:
   8     value (double) OR
   n     string (0 terminated)
   ...
+  ...
+
+section appends
+
+  4     number of appends (int)
+  ...
+  n     section name (0 terminated)
+  n     append to (0 terminated)
   ...
 
 data area (loops to the end of the file):
@@ -127,6 +136,7 @@ section:
   n     name (terminated with 0 (free), 1 (forced), 2 (overwrite), 3 (header),
                               4 (semifree), 5 (absolute), 6 (ram),
                               7 (superfree) or 8 (semisubfree))
+  n     namespace (terminated with 0)
   4     section id (int)
   1     slot number (0-255)
   1     file id
@@ -140,7 +150,7 @@ section:
 
 
 
-WLA-GB/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 library file format "WLAW"
+WLA-GB/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 library file format "WLAY"
 
 
 bytes   description
@@ -148,7 +158,7 @@ bytes   description
 header:
 
   4     format information,
-        "WLAW" - WLA-GB/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 library file version 12 (18-Oct-2014)
+        "WLAY" - WLA-GB/Z80/6502/65C02/6510/65816/HuC6280/SPC-700 library file version 13 (18-Feb-2016)
 
 source file name list:
 
@@ -182,8 +192,8 @@ outside references:
   4     number of references (int)
   ...
   n     label (0 terminated)
-  1     type (0 = direct 16bit, 1 = relative 8bit, 2 = direct 8bit, 3 = direct 24bit,
-              4 = relative 16bit)
+  1     type (0 = direct 16-bit, 1 = relative 8-bit, 2 = direct 8-bit, 3 = direct 24-bit,
+              4 = relative 16-bit)
   4     section (1+ = section id) (int)
   1     file id
   4     line number (int)
@@ -195,7 +205,7 @@ pending calculations:
   4     number of pending calculations (int)
   ...
   4     id (int)
-  1     result type (0 = 8bit, 1 = 16bit, 2 = 24bit)
+  1     result type (0 = 8-bit, 1 = 16-bit, 2 = 24-bit)
         if bit 7 ~ 1, then the label references are relative, else absolute
   4     section (1+ = section id) (int)
   1     file id
@@ -211,10 +221,19 @@ pending calculations:
   ...
   ...
 
+section appends
+
+  4     number of appends (int)
+  ...
+  n     section name (0 terminated)
+  n     append to (0 terminated)
+  ...
+
 sections:
 
   ...
   n     name (terminated with 0 (for free) or 7 (for superfree))
+  n     namespace (terminated with 0)
   4     section id (int)
   1     file id
   4     number of bytes (int)

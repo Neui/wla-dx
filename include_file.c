@@ -11,8 +11,8 @@
 #include "parse.h"
 
 
-extern int ind, inz, i, unfolded_size, extra_definitions, d;
-extern char *unfolded_buffer, emsg[256], tmp[4096];
+extern int ind, inz, i, unfolded_size, extra_definitions, d, use_incdir;
+extern char *unfolded_buffer, emsg[256], tmp[4096], ext_incdir[MAX_NAME_LENGTH];
 extern FILE *file_out_ptr;
 
 struct incbin_file_data *incbin_file_data_first = NULL, *ifd_tmp;
@@ -74,24 +74,47 @@ int include_file(char *name) {
 
   static int first_load = 0;
   int file_size, id;
-  char *tmp_b, *n;
+  char *tmp_b, *n, *tmp_c;
   FILE *f;
 
 
   /* create the full output file name */
-  if (create_full_name(include_dir, name) == FAILED)
+  if (use_incdir == YES)
+    tmp_c = ext_incdir;
+  else
+    tmp_c = include_dir;
+
+  if (create_full_name(tmp_c, name) == FAILED)
     return FAILED;
 
   f = fopen(full_name, "rb");
   id = 0;
 
-  if (f == NULL && (include_dir == NULL || include_dir[0] == 0)) {
+  if (f == NULL && (tmp_c == NULL || tmp_c[0] == 0)) {
     sprintf(emsg, "Error opening file \"%s\".\n", name);
     if (first_load == 0)
       fprintf(stderr, "INCLUDE_FILE: %s", emsg);
     else
       print_error(emsg, ERROR_INC);
     return FAILED;
+  }
+
+  /* if not found in ext_incdir silently try the include directory */
+  if (f == NULL && use_incdir == YES) {
+    if (create_full_name(include_dir, name) == FAILED)
+      return FAILED;
+  
+    f = fopen(full_name, "rb");
+    id = 0;
+  
+    if (f == NULL && (include_dir == NULL || include_dir[0] == 0)) {
+      sprintf(emsg, "Error opening file \"%s\".\n", name);
+      if (first_load == 0)
+        fprintf(stderr, "INCLUDE_FILE: %s", emsg);
+      else
+        print_error(emsg, ERROR_INC);
+      return FAILED;
+    }
   }
 
   /* if failed try to find the file in the current directory */
@@ -280,22 +303,42 @@ int include_file(char *name) {
 int incbin_file(char *name, int *id, int *swap, int *skip, int *read, struct macro_static **macro) {
 
   struct incbin_file_data *ifd;
-  char *in_tmp, *n;
+  char *in_tmp, *n, *tmp_c;
   int file_size, q;
   FILE *f;
 
   
   /* create the full output file name */
-  if (create_full_name(include_dir, name) == FAILED)
+  if (use_incdir == YES)
+    tmp_c = ext_incdir;
+  else
+    tmp_c = include_dir;
+
+  if (create_full_name(tmp_c, name) == FAILED)
     return FAILED;
 
   f = fopen(full_name, "rb");
   q = 0;
 
-  if (f == NULL && (include_dir == NULL || include_dir[0] == 0)) {
+  if (f == NULL && (tmp_c == NULL || tmp_c[0] == 0)) {
     sprintf(emsg, "Error opening file \"%s\".\n", name);
     print_error(emsg, ERROR_INB);
     return FAILED;
+  }
+
+  /* if not found in ext_incdir silently try the include directory */
+  if (f == NULL && use_incdir == YES) {
+    if (create_full_name(include_dir, name) == FAILED)
+      return FAILED;
+  
+    f = fopen(full_name, "rb");
+    q = 0;
+  
+    if (f == NULL && (include_dir == NULL || include_dir[0] == 0)) {
+      sprintf(emsg, "Error opening file \"%s\".\n", name);
+      print_error(emsg, ERROR_INB);
+      return FAILED;
+    }
   }
 
   /* if failed try to find the file in the current directory */
@@ -344,7 +387,7 @@ int incbin_file(char *name, int *id, int *swap, int *skip, int *read, struct mac
   /* complete the structure */
   ifd->next = NULL;
   ifd->size = file_size;
-  strcpy(n, name);
+  strcpy(n, full_name);
   ifd->name = n;
   ifd->data = in_tmp;
 
@@ -352,11 +395,11 @@ int incbin_file(char *name, int *id, int *swap, int *skip, int *read, struct mac
   q = 0;
   if (incbin_file_data_first != NULL) {
     ifd_tmp = incbin_file_data_first;
-    while (ifd_tmp->next != NULL && strcmp(ifd_tmp->name, name) != 0) {
+    while (ifd_tmp->next != NULL && strcmp(ifd_tmp->name, full_name) != 0) {
       ifd_tmp = ifd_tmp->next;
       q++;
     }
-    if (ifd_tmp->next == NULL) {
+    if (ifd_tmp->next == NULL && strcmp(ifd_tmp->name, full_name) != 0) {
       ifd_tmp->next = ifd;
       q++;
     }
@@ -484,27 +527,27 @@ int print_file_names(void) {
   /* handle the main file name differently */
   if (fni != NULL) {
     if (fni->next != NULL || ifd != NULL)
-      fprintf(stderr, "%s \\\n", fni->name);
+      fprintf(stdout, "%s \\\n", fni->name);
     else
-      fprintf(stderr, "%s\n", fni->name);
+      fprintf(stdout, "%s\n", fni->name);
     fni = fni->next;
   }
 
   /* included files */
   while (fni != NULL) {
     if (fni->next != NULL || ifd != NULL)
-      fprintf(stderr, "\t%s \\\n", fni->name);
+      fprintf(stdout, "\t%s \\\n", fni->name);
     else
-      fprintf(stderr, "\t%s\n", fni->name);
+      fprintf(stdout, "\t%s\n", fni->name);
     fni = fni->next;
   }
 
   /* incbin files */
   while (ifd != NULL) {
     if (ifd->next != NULL)
-      fprintf(stderr, "\t%s \\\n", ifd->name);
+      fprintf(stdout, "\t%s \\\n", ifd->name);
     else
-      fprintf(stderr, "\t%s\n", ifd->name);
+      fprintf(stdout, "\t%s\n", ifd->name);
     ifd = ifd->next;
   }
 
@@ -623,7 +666,7 @@ int preprocess_file(char *input, char *input_end, char *out_buffer, int *out_siz
       /* take away white space from the end of the line */
       input++;
       output--;
-      for ( ; *output == ' '; output--)
+      for ( ; output > out_buffer && *output == ' '; output--)
 	;
       output++;
       *output = 0x0A;
@@ -662,24 +705,32 @@ int preprocess_file(char *input, char *input_end, char *out_buffer, int *out_siz
       *output = '"';
       input++;
       output++;
-      got_chars_on_line = 0;
-      while (got_chars_on_line == 0) {
-	for ( ; input < input_end && *input != '"'; ) {
+      got_chars_on_line = 1;
+      while (1) {
+	for ( ; input < input_end && *input != '"' && *input != 0x0A && *input != 0x0D; ) {
 	  *output = *input;
 	  input++;
 	  output++;
 	}
-	if (*input == '"' && *(input - 1) != '\\')
-	  got_chars_on_line = 1;
+
+	if (input >= input_end)
+	  break;
+	else if (*input == 0x0A || *input == 0x0D) {
+	  /* process 0x0A/0x0D as usual, and later when we try to input a string, the parser will fail as 0x0A comes before a " */
+	  break;
+	}
+	else if (*input == '"' && *(input - 1) != '\\') {
+	  *output = '"';
+	  input++;
+	  output++;
+	  break;
+	}
 	else {
 	  *output = '"';
 	  input++;
 	  output++;
 	}
       }
-      *output = '"';
-      input++;
-      output++;
       break;
 #if !defined(W65816) && !defined(SPC700)
     case '[':

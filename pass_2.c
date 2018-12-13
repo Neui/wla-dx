@@ -13,8 +13,19 @@
 
 #ifdef GB
 extern int licenseecodeold;
+extern int nintendologo_defined;
 extern int name_defined, licenseecodeold_defined, licenseecodenew_defined;
+extern int countrycode, countrycode_defined;
 extern char name[32], licenseecodenew_c1, licenseecodenew_c2;
+
+unsigned char nintendo_logo_dat[] = {
+  0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B,
+  0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
+  0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E,
+  0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
+  0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC,
+  0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
+};
 #endif
 
 #ifdef Z80
@@ -22,6 +33,7 @@ extern char sdsctag_name_str[MAX_NAME_LENGTH], sdsctag_notes_str[MAX_NAME_LENGTH
 extern int sdsctag_name_type, sdsctag_notes_type, sdsctag_author_type, sdsc_ma, sdsc_mi;
 extern int sdsctag_name_value, sdsctag_notes_value, sdsctag_author_value;
 extern int computesmschecksum_defined, sdsctag_defined, smstag_defined;
+extern int smsheader_defined, smsversion, smsversion_defined, smsregioncode, smsregioncode_defined, smsproductcode_defined, smsproductcode1, smsproductcode2, smsproductcode3, smsreservedspace1, smsreservedspace2;
 #endif
 
 #ifdef W65816
@@ -82,6 +94,27 @@ int pass_2(void) {
     mem_insert_absolute(0x7FF6, 0x47);
     mem_insert_absolute(0x7FF7, 0x41);
     */
+  }
+
+  /* SMSHEADER */
+  if (smsheader_defined != 0) {
+    int tag_address = 0x7FF0;
+  
+    if (max_address < 0x4000) {
+      /* let's assume it's a 8KB ROM */
+      tag_address = 0x1FF0;
+    }
+    else if (max_address < 0x8000) {
+      /* let's assume it's a 16KB ROM */
+      tag_address = 0x3FF0;
+    }
+
+    mem_insert_absolute(tag_address + 0x8, smsreservedspace1);
+    mem_insert_absolute(tag_address + 0x9, smsreservedspace2);
+    mem_insert_absolute(tag_address + 0xC, smsproductcode1);
+    mem_insert_absolute(tag_address + 0xD, smsproductcode2);
+    mem_insert_absolute(tag_address + 0xE, (smsproductcode3 << 4) | smsversion);
+    mem_insert_absolute(tag_address + 0xF, smsregioncode << 4);
   }
 
   /* SDSCTAG */
@@ -295,8 +328,22 @@ int pass_2(void) {
 #ifdef GB
   /* insert the descriptive data (not in library files) */
   if (output_format == OUTPUT_OBJECT) {
-    if (romgbc != 0)
-      mem_insert_absolute(323, 128);
+    if (nintendologo_defined != 0) {
+      int nl1 = 0x104;
+      unsigned int nl2 = 0;
+      
+      while (nl2 < sizeof(nintendo_logo_dat)) {
+        mem_insert_absolute(nl1, nintendo_logo_dat[nl2]);
+        nl1++;
+        nl2++;
+      }
+    }
+    
+    if (romgbc == 1)
+      mem_insert_absolute(323, 0x80);
+    else if (romgbc == 2)
+      mem_insert_absolute(323, 0xc0);
+
     if (romdmg != 0)
       mem_insert_absolute(326, 0);
     if (romsgb != 0)
@@ -314,6 +361,9 @@ int pass_2(void) {
       mem_insert_absolute(331, 51);
       mem_insert_absolute(324, licenseecodenew_c1);
       mem_insert_absolute(325, licenseecodenew_c2);
+    }
+    if (countrycode_defined != 0) {
+      mem_insert_absolute(330, countrycode);
     }
     if (name_defined != 0) {
       if (romgbc != 0)
@@ -350,6 +400,8 @@ int create_a_new_section_structure(void) {
   sec_tmp->id = section_id;
   sec_tmp->alive = ON;
   sec_tmp->advance_org = NO;
+  sec_tmp->nspace = NULL;
+  sec_tmp->label_map = hashmap_new();
   section_id++;
   sec_tmp->filename_id = 0;
   sec_tmp->alignment = 1;

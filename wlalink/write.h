@@ -3,7 +3,9 @@
 #define _WRITE_H
 
 int fix_references(void);
-int fix_labels(void);
+int fix_label_sections(void);
+int insert_label_into_maps(struct label *l, int is_sizeof);
+int fix_label_addresses(void);
 int transform_stack_definitions(void);
 int insert_sections(void);
 int write_symbol_file(char *outname, unsigned char mode);
@@ -17,6 +19,9 @@ int parse_stack(struct stack *sta);
 int get_snes_pc_bank(struct label *l);
 int correct_65816_library_sections(void);
 int is_label_anonymous(char *label);
-struct label *get_closest_anonymous_label(char *name, int rom_address, int file_id, struct label *l, int section_status, int section);
+int sort_anonymous_labels(void);
+struct label *get_closest_anonymous_label(char *name, int rom_address, int file_id, int section_status, int section);
+struct stack *find_stack(int id, int file_id);
+int generate_sizeof_label_definitions(void);
 
 #endif
