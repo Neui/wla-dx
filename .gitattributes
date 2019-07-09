@@ -49,3 +49,5 @@ historical/wlad_new/makefile.win32* text eol=crlf
 *.o     binary
 *.lib   binary
 
+# Special exception for historical makefiles
+historical/**/*make* text
